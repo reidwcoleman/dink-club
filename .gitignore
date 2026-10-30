@@ -9,3 +9,7 @@ assets-gen/*
 !assets-gen/gen.sh
 ios/DinkPaddle.xcodeproj/
 ios/build/
+tv-android/.gradle/
+tv-android/app/build/
+tv-android/build/
+tv-android/local.properties

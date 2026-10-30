@@ -23,7 +23,10 @@ const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
 renderer.composer.passes.forEach((p) => ((p as unknown as { mainScene: THREE.Scene }).mainScene = world.scene));
-renderer.setQuality((params.get('q') as Quality) ?? 'high');
+// on the TV app (an Android TV box's GPU) start lighter; the renderer adapts its resolution from there
+const onTV = params.get('tv') === '1';
+renderer.setQuality((params.get('q') as Quality) ?? (onTV ? 'low' : 'high'));
+if (onTV) world.sky.sun.shadow.mapSize.set(2048, 2048);
 const exMul = +(params.get('ex') ?? 1);
 
 const input = new Input();
@@ -173,6 +176,15 @@ function togglePause() {
   }
 }
 input.onPause = togglePause;
+// the TV remote's Back button (from the Android TV app)
+(window as unknown as Record<string, unknown>).__tvBack = () => {
+  if (summaryEl) { location.reload(); return; }
+  if (inMatch) togglePause();
+};
+if (onTV) {
+  document.body.classList.add('tv', 'sound-on');
+  audio.start();
+}
 input.onCamera = () => {
   if (game) game.dir.pref = (game.dir.pref + 1) % 3;
 };

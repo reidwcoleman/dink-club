@@ -76,6 +76,8 @@ export class Menu {
     const snd = el('div', 'm-sound', 'Click anywhere on this screen to turn the sound on');
     card.append(join, this.slotsEl, opts, this.playBtn, this.status, keys, snd);
     this.root.append(left, card);
+    remoteNav(card, () => !this.root.classList.contains('gone'));
+    setTimeout(() => this.playBtn.focus({ preventScroll: true }), 200);
     this.setSlots([null, null]);
   }
 
@@ -127,6 +129,44 @@ export class Menu {
   }
 }
 
+/**
+ * TV remote navigation: arrows move the focus between the buttons (left/right within a row,
+ * up/down to the nearest button above or below), OK/Enter presses it.
+ */
+export function remoteNav(scope: HTMLElement, active: () => boolean = () => true) {
+  addEventListener('keydown', (e) => {
+    if (!active() || !scope.isConnected) return;
+    const btns = [...scope.querySelectorAll<HTMLButtonElement>('button:not([disabled])')];
+    if (!btns.length) return;
+    const cur = document.activeElement as HTMLElement | null;
+    const i = cur ? btns.indexOf(cur as HTMLButtonElement) : -1;
+    const dirs: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const d = dirs[e.key];
+    if (d) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (i < 0) { btns[0].focus(); return; }
+      const r0 = btns[i].getBoundingClientRect();
+      const c0 = { x: r0.left + r0.width / 2, y: r0.top + r0.height / 2 };
+      let best: HTMLButtonElement | null = null, bestS = Infinity;
+      for (const b of btns) {
+        if (b === btns[i]) continue;
+        const r = b.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - c0.x, dy = r.top + r.height / 2 - c0.y;
+        const along = dx * d[0] + dy * d[1];
+        if (along <= 4) continue;
+        const across = Math.abs(dx * d[1] + dy * d[0]);
+        const s = along + across * (d[0] ? 4 : 0.6);
+        if (s < bestS) { bestS = s; best = b; }
+      }
+      best?.focus();
+    } else if (e.key === 'Enter' && i >= 0) {
+      e.preventDefault();
+      btns[i].click();
+    }
+  }, true);
+}
+
 export function pauseOverlay(parent: HTMLElement, onResume: () => void, onQuit: () => void): HTMLElement {
   const o = el('div', 'overlay');
   const card = el('div', 'ocard');
@@ -138,6 +178,8 @@ export function pauseOverlay(parent: HTMLElement, onResume: () => void, onQuit: 
   card.append(r, q);
   o.append(card);
   parent.append(o);
+  remoteNav(card);
+  setTimeout(() => r.focus(), 50);
   return o;
 }
 
@@ -164,5 +206,7 @@ export function summaryOverlay(parent: HTMLElement, m: Match, names: [string, st
   card.append(a, b, el('div', 'm-keys', 'Or swing / tap Rematch on your phone'));
   o.append(card);
   parent.append(o);
+  remoteNav(card);
+  setTimeout(() => a.focus(), 50);
   return o;
 }

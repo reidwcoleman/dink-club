@@ -140,3 +140,8 @@ button { font: inherit; cursor: pointer; }
   .bug { left: 12px; top: 12px; min-width: 220px; }
   .pads { display: none; }
 }
+
+/* TV remote focus */
+button:focus-visible, .tv button:focus { outline: 3px solid var(--ball); outline-offset: 3px; }
+.segb:focus-visible { outline-offset: 2px; }
+.tv .m-sound { display: none; }
