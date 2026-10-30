@@ -1,13 +1,12 @@
 import SwiftUI
 import AVFoundation
 
-/// The front door: the logo, your name, a paddle, and the TV's code (scanned or typed).
+/// The front door: the TV's code, scanned or typed. That's all it asks.
 struct JoinView: View {
     @ObservedObject var session: Session
     @State private var code = ""
     @State private var scanning = false
     @State private var error = ""
-    private let paddles = ["paddle_a", "paddle_b", "paddle_c"]
 
     var body: some View {
         ZStack {
@@ -30,22 +29,8 @@ struct JoinView: View {
                             .foregroundStyle(Color(red: 0.1, green: 0.07, blue: 0.03))
                             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
-                    HStack(spacing: 10) {
-                        field("Code", text: $code, caps: true)
-                            .frame(width: 130)
-                            .onChange(of: code) { v in code = String(v.uppercased().filter { $0.isLetter }.prefix(4)) }
-                        field("Your name", text: $session.name, caps: false)
-                    }
-                    HStack(spacing: 10) {
-                        ForEach(0..<paddles.count, id: \.self) { i in
-                            Button { session.paddle = i } label: {
-                                PaddleThumb(name: paddles[i])
-                                    .padding(8)
-                                    .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(session.paddle == i ? 0.14 : 0.05)))
-                                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(session.paddle == i ? Color.orange : .clear, lineWidth: 2))
-                            }
-                        }
-                    }
+                    field("TV code", text: $code, caps: true)
+                        .onChange(of: code) { v in code = String(v.uppercased().filter { $0.isLetter }.prefix(4)) }
                     Button("Join") { join(code) }
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .frame(maxWidth: .infinity).padding(.vertical, 15)
@@ -69,7 +54,6 @@ struct JoinView: View {
     }
 
     private func join(_ c: String) {
-        if session.name.trimmingCharacters(in: .whitespaces).isEmpty { session.name = "Player" }
         session.room = c
     }
 
@@ -84,19 +68,6 @@ struct JoinView: View {
                 .background(Color.white.opacity(0.07))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-    }
-}
-
-/// the paddle art, loaded from the game's site (cached by URLSession)
-struct PaddleThumb: View {
-    let name: String
-    var body: some View {
-        AsyncImage(url: URL(string: "https://reidwcoleman.github.io/dink-club/art/\(name).webp")) { img in
-            img.resizable().scaledToFit()
-        } placeholder: {
-            RoundedRectangle(cornerRadius: 30).fill(Color.white.opacity(0.08))
-        }
-        .frame(height: 110)
     }
 }
 

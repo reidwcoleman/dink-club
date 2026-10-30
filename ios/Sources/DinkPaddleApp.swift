@@ -11,8 +11,7 @@ struct DinkPaddleApp: App {
         WindowGroup {
             Group {
                 if let room = session.room {
-                    PaddleView(room: room, name: session.name, paddle: session.paddle) { session.room = nil }
-                        .ignoresSafeArea()
+                    PaddleView(room: room) { session.room = nil }
                 } else {
                     JoinView(session: session)
                 }

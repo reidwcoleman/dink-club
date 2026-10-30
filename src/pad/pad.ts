@@ -28,6 +28,10 @@ const native: NativeBridge | null = params.get('native') === '1' ? ((window as u
 function toNative(m: Record<string, unknown>) {
   try { native?.postMessage(m); } catch { /* not in the app */ }
 }
+/** the app draws its own screen: tell it how the link is doing */
+function linkStatus(state: 'connecting' | 'live' | 'lost' | 'notfound' | 'full') {
+  toNative({ t: 'status', state });
+}
 let name = params.get('name') ?? store('dink-name') ?? '';
 let paddle = +(params.get('paddle') ?? store('dink-paddle') ?? 0) % PADDLES.length;
 
@@ -116,6 +120,7 @@ function connect() {
       if (conn !== c) return;
       connected = true;
       send({ t: 'hello', id: myId, name, paddle });
+      linkStatus('live');
     });
     c.on('data', (d) => { if (conn === c) onTv(d as TvMsg); });
     c.on('close', () => { if (conn === c) lost(); });
@@ -124,7 +129,7 @@ function connect() {
   p.on('error', (e) => {
     if (peer !== p) return;
     const type = (e as { type?: string }).type;
-    if (type === 'peer-unavailable') { peer = null; p.destroy(); setMsg('No TV with that code', 'Check the code on the TV screen'); setTimeout(() => joinScreen(`Room ${room} not found.`), 1500); }
+    if (type === 'peer-unavailable') { linkStatus('notfound'); peer = null; p.destroy(); setMsg('No TV with that code', 'Check the code on the TV screen'); setTimeout(() => joinScreen(`Room ${room} not found.`), 1500); }
     else lost();
   });
 }
@@ -132,6 +137,7 @@ function connect() {
 let retry = 0;
 function lost() {
   connected = false;
+  linkStatus('lost');
   setDot(false);
   setMsg('Reconnecting…', `Room ${room}`);
   clearTimeout(retry);
@@ -179,6 +185,7 @@ function onTv(m: TvMsg) {
       break;
     case 'full':
       setMsg('The court is full', 'Two paddles are already connected');
+      linkStatus('full');
       break;
   }
 }

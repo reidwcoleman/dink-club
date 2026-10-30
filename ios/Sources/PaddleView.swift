@@ -2,79 +2,114 @@ import SwiftUI
 import WebKit
 import CoreMotion
 
-/// The paddle: the game's pad page (it connects to the TV over WebRTC and shows the score),
-/// with this app feeding it swings from CoreMotion and turning its hits into real haptics.
-struct PaddleView: UIViewRepresentable {
+/// The paddle and nothing else: the phone's motion is the paddle. A hidden web view carries the
+/// link to the TV (WebRTC); this screen only shows whether the paddle is live and flashes on a swing.
+struct PaddleView: View {
     let room: String
-    let name: String
-    let paddle: Int
     let onLeave: () -> Void
+    @StateObject private var link = PaddleLink()
 
-    func makeCoordinator() -> Coordinator { Coordinator(onLeave: onLeave) }
+    var body: some View {
+        ZStack {
+            LinkWebView(room: room, link: link).opacity(0.01).allowsHitTesting(false)
+            Color(red: 0.06, green: 0.05, blue: 0.08).ignoresSafeArea()
+            Circle()
+                .fill(link.live ? Color(red: 0.75, green: 0.95, blue: 0.2) : Color.white.opacity(0.12))
+                .frame(width: 180, height: 180)
+                .scaleEffect(link.pulse ? 1.12 : 1)
+                .opacity(link.pulse ? 1 : (link.live ? 0.8 : 1))
+                .animation(.spring(response: 0.25, dampingFraction: 0.5), value: link.pulse)
+            VStack {
+                Spacer()
+                Text(link.text)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.75))
+                Button("Leave", action: onLeave)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.top, 14).padding(.bottom, 30)
+            }
+        }
+        .onChange(of: link.ended) { e in if e { onLeave() } }
+        .onDisappear { link.motion.stop() }
+    }
+}
+
+/// what the hidden page reports back, and the motion + haptics it drives
+final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
+    @Published var live = false
+    @Published var pulse = false
+    @Published var text = "Connecting…"
+    @Published var ended = false
+    weak var web: WKWebView?
+    let motion = SwingDetector()
+    private let hit = UIImpactFeedbackGenerator(style: .rigid)
+    private let hard = UIImpactFeedbackGenerator(style: .heavy)
+    private let note = UINotificationFeedbackGenerator()
+
+    override init() {
+        super.init()
+        motion.onSwing = { [weak self] s in
+            guard let self else { return }
+            let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f})",
+                            s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak)
+            self.web?.evaluateJavaScript(js)
+            self.pulse = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
+        }
+    }
+
+    func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let m = message.body as? [String: Any], let t = m["t"] as? String else { return }
+        switch t {
+        case "start":
+            motion.start()
+            hit.prepare(); hard.prepare()
+        case "recenter":
+            motion.recenter()
+        case "status":
+            switch m["state"] as? String {
+            case "live": live = true; text = "Paddle ready · swing away"; note.notificationOccurred(.success)
+            case "lost": live = false; text = "Reconnecting…"
+            case "notfound": live = false; text = "No TV with that code"; DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.ended = true }
+            case "full": live = false; text = "Two paddles are already playing"
+            default: break
+            }
+        case "haptic":
+            switch m["k"] as? String {
+            case "hard": hard.impactOccurred(intensity: 1)
+            case "point": note.notificationOccurred(.success)
+            default: hit.impactOccurred(intensity: 0.85)
+            }
+            hit.prepare(); hard.prepare()
+        default: break
+        }
+    }
+}
+
+/// the game's pad page, off screen: it holds the WebRTC link to the TV
+struct LinkWebView: UIViewRepresentable {
+    let room: String
+    let link: PaddleLink
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
-        cfg.userContentController.add(context.coordinator, name: "dink")
+        cfg.userContentController.add(link, name: "dink")
         let web = WKWebView(frame: .zero, configuration: cfg)
         web.isOpaque = false
-        web.backgroundColor = UIColor(red: 0.08, green: 0.07, blue: 0.11, alpha: 1)
-        web.scrollView.isScrollEnabled = false
-        web.scrollView.bounces = false
-        web.scrollView.contentInsetAdjustmentBehavior = .never
-        context.coordinator.web = web
+        link.web = web
         var c = URLComponents(string: "https://reidwcoleman.github.io/dink-club/pad.html")!
-        c.queryItems = [.init(name: "room", value: room), .init(name: "native", value: "1"), .init(name: "name", value: name), .init(name: "paddle", value: String(paddle))]
+        c.queryItems = [.init(name: "room", value: room), .init(name: "native", value: "1"), .init(name: "name", value: "Player")]
         web.load(URLRequest(url: c.url!, cachePolicy: .reloadRevalidatingCacheData))
         return web
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {}
 
-    static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
-        coordinator.motion.stop()
+    static func dismantleUIView(_ web: WKWebView, coordinator: ()) {
         web.configuration.userContentController.removeScriptMessageHandler(forName: "dink")
-    }
-
-    final class Coordinator: NSObject, WKScriptMessageHandler {
-        weak var web: WKWebView?
-        let motion = SwingDetector()
-        let onLeave: () -> Void
-        private let hit = UIImpactFeedbackGenerator(style: .rigid)
-        private let hard = UIImpactFeedbackGenerator(style: .heavy)
-        private let note = UINotificationFeedbackGenerator()
-
-        init(onLeave: @escaping () -> Void) {
-            self.onLeave = onLeave
-            super.init()
-            motion.onSwing = { [weak self] s in
-                let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f})",
-                                s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak)
-                self?.web?.evaluateJavaScript(js)
-            }
-        }
-
-        func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let m = message.body as? [String: Any], let t = m["t"] as? String else { return }
-            switch t {
-            case "start":
-                motion.start()
-                hit.prepare(); hard.prepare()
-            case "recenter":
-                motion.recenter()
-            case "haptic":
-                switch m["k"] as? String {
-                case "hard": hard.impactOccurred(intensity: 1)
-                case "point": note.notificationOccurred(.success)
-                default: hit.impactOccurred(intensity: 0.85)
-                }
-                hit.prepare(); hard.prepare()
-            case "leave":
-                onLeave()
-            default: break
-            }
-        }
     }
 }
 
