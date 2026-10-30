@@ -109,7 +109,7 @@ export class Game {
       const rig = new PlayerRig(h, PADDLE_ART[paddle % PADDLE_ART.length]);
       this.world.scene.add(h.root);
       this.world.dynamic.push(h.root);
-      return new Player(i, r.name, rig, human, human ? { speed: 5.4, accel: 19, power: 0.95, accuracy: 0.9, spin: 0.85, reaction: 0.05 } : AI_LEVELS[cfg.level].skill);
+      return new Player(i, r.name, rig, human, human ? { speed: 4.7, accel: 16, power: 0.95, accuracy: 0.9, spin: 0.85, reaction: 0.12 } : AI_LEVELS[cfg.level].skill);
     };
     const a = ROSTER[cfg.near], b = ROSTER[cfg.far];
     this.players = [await make(a, 0, !cfg.demo, paddles[0]), await make(b, 1, cfg.players === 2 && !cfg.demo, paddles[1])];

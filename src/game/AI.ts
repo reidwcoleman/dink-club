@@ -37,14 +37,14 @@ export function aiChooseShot(me: Player, plan: Plan, opp: Player, level: Difficu
   const oppX = opp.pos.x * me.side;
   const away = oppX > 0.4 ? -1 : oppX < -0.4 ? 1 : R() < 0.5 ? -1 : 1;
   const cross = Math.sign(plan.body.x * me.side || (R() - 0.5));
-  if (plan.smash) return { type: 'smash', aimX: away * (0.4 + R() * 0.5), power: 0.75 + L.skill.power * 0.25 };
+  if (plan.smash) return { type: 'smash', aimX: away * (0.55 + L.skill.accuracy * 0.4), power: 0.75 + L.skill.power * 0.25 };
   if (strike === 2) return { type: 'reset', aimX: (R() - 0.5) * 1.2, power: 0.55 + R() * 0.2 };
   if (strike === 3 && !atKitchen) {
     if (R() < L.drops) return { type: 'drop', aimX: (R() - 0.5) * 1.2, power: 0.2 };
     return { type: 'drive', aimX: away * (0.3 + R() * 0.5), power: 0.7 + R() * 0.25 };
   }
   // a ball up above the net at the kitchen: speed it up at the body or into the gap
-  if (atKitchen && h > 1.05 && R() < 0.35 + L.aggression) return { type: 'drive', aimX: R() < 0.5 ? Math.sign(oppX || 1) * 0.2 : away * 0.8, power: 0.75 + R() * 0.25 };
+  if (atKitchen && h > 1.0 && R() < 0.35 + L.aggression) return { type: 'drive', aimX: R() < 0.4 ? Math.sign(oppX || 1) * 0.2 : away * (0.75 + L.skill.accuracy * 0.25), power: 0.75 + R() * 0.25 };
   if (atKitchen && oppAtNet) {
     if (R() < 0.05 + L.aggression * 0.08) return { type: 'lob', aimX: (R() - 0.5) * 1.2, power: 0.5 };
     return { type: 'dink', aimX: R() < 0.6 ? cross * (0.4 + R() * 0.5) : -cross * (0.2 + R() * 0.5), power: 0.15 };
