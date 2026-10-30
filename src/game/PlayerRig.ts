@@ -123,7 +123,8 @@ for (const kind of ['fh', 'bh', 'fhSlice', 'bhSlice', 'fhVolley', 'bhVolley', 's
   STROKES[kind] = STROKES[kind].map((k) => ({ ...k, head: [k.head[0] * 0.8, 1.3 + (k.head[1] - 1.3) * 0.88, k.head[2] * 0.82] as L3 }));
 }
 // the ready position: paddle up in front of the chest, the off hand on the throat
-STROKES.fh[0] = { ...STROKES.fh[0], head: [0.15, 1.1, 0.45], shaft: [-0.05, 0.75, 0.66], face: [-1, 0, 0.1] };
+// pickleball's ready position: paddle up in front of the chest, face to the net, off hand beside it
+STROKES.fh[0] = { ...STROKES.fh[0], head: [0.02, 1.28, 0.48], shaft: [-0.1, 0.93, 0.35], face: [0.05, -0.3, 0.95], off: [-0.3, 1.12, 0.36] };
 STROKES.bh[0] = STROKES.fh[0];
 const READY = STROKES.fh[0];
 const DEG = Math.PI / 180;

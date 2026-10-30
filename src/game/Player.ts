@@ -141,6 +141,48 @@ export class Player {
     return best;
   }
 
+  /**
+   * A player who moves themselves: no running to the ball — where along its flight does it come
+   * past the paddle from where they stand (forehand or backhand side, a comfortable height)?
+   */
+  planReach(pts: (V3 & { t: number })[], events: BallEvent[], now: number, allowVolley: boolean): Plan | null {
+    const s = this.side;
+    const bounces = events.filter((e) => e.kind === 'bounce') as Extract<BallEvent, { kind: 'bounce' }>[];
+    const myBounce = bounces.find((b) => b.z * s > 0);
+    const secondBounce = myBounce ? bounces.find((b) => b.t > myBounce.t + 0.01) : undefined;
+    const fwd = this.fwd, right = this.right;
+    // where they'll be: a little of their current run carries on
+    const at = this.pos.clone().addScaledVector(this.vel, 0.15);
+    let best: Plan | null = null;
+    let bestScore = Infinity;
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i];
+      if (p.z * s < 0.35) continue;
+      if (secondBounce && p.t >= secondBounce.t - 0.02) break;
+      const bounced = !!myBounce && p.t > myBounce.t;
+      const volley = !bounced;
+      if (volley && !allowVolley) continue;
+      if (p.y < 0.1 || p.y > 2.5) continue;
+      const smash = p.y > 1.75;
+      const ball = new THREE.Vector3(p.x, p.y, p.z);
+      for (const fh of [true, false]) {
+        if (smash && !fh) continue;
+        const lat = smash ? REACH.smashLat : fh ? REACH.fhLat : REACH.bhLat;
+        const ahead = smash ? REACH.smashAhead : volley ? REACH.volleyAhead : REACH.ahead;
+        const spot = at.clone().addScaledVector(right, fh ? lat : -lat).addScaledVector(fwd, ahead);
+        const d = Math.hypot(spot.x - p.x, spot.z - p.z);
+        if (d > 1.3) continue;
+        const score = d * 3 + Math.abs(p.y - (bounced ? 0.8 : 1.0)) * 0.8 + (fh ? 0 : 0.1) + p.t * 0.02;
+        if (score < bestScore) {
+          bestScore = score;
+          const kind: StrokeKind = smash ? 'smash' : volley ? (fh ? 'fhVolley' : 'bhVolley') : fh ? 'fh' : 'bh';
+          best = { tContact: now + p.t, ball, body: at.clone().setY(0), kind, forehand: fh, volley, smash, bounced, late: d > 0.5 ? 0.1 : -0.2, swung: false, lunge: d > 0.55 };
+        }
+      }
+    }
+    return best;
+  }
+
   /** the top speed in a direction: going back is a backpedal or a turn-and-run, slower than moving up or across */
   topSpeed(dir: THREE.Vector3): number {
     const l = Math.hypot(dir.x, dir.z);

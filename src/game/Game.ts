@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BallSim, predict, type BallEvent, v3 } from '../sim/Ball.ts';
 import { solveShot, type ShotSpec } from '../sim/Shot.ts';
+import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
 import { FENCE } from '../world/Club.ts';
 import { Match, type PointReason } from './Match.ts';
@@ -47,6 +48,8 @@ export interface GameConfig {
   to: number;
   games: 1 | 3;
   rally: boolean;
+  /** who moves a human player: the computer runs them to the ball, or they move themselves (the phone's position) */
+  move?: 'auto' | 'body';
   /** roster indices for the near and far player */
   near: number;
   far: number;
@@ -91,6 +94,10 @@ export class Game {
   private perfects = [0, 0];
   private hot = [false, false];
   private prevBall = new THREE.Vector3();
+  /** "you move" mode: each phone's position in the room (m, right / toward the TV) and when it came */
+  private bodyPos: ({ x: number; z: number; t: number } | null)[] = [null, null];
+  /** the room position that maps to where the player stood when the point started */
+  private bodyAnchor: ({ px: number; pz: number; cx: number; cz: number } | null)[] = [null, null];
   private hitStop = 0;
   replay!: Replay;
   private highlight = false;
@@ -142,6 +149,34 @@ export class Game {
     this.match = new Match({ to: cfg.to, games: cfg.games, rally: cfg.rally }, Math.random() < 0.5 ? 0 : 1);
     this.dir.side = 1;
     this.dir.cut('intro');
+  }
+
+  /** a phone's position in the room (the app's camera tracking) */
+  setBodyPos(slot: number, x: number, z: number) {
+    this.bodyPos[slot] = { x, z, t: performance.now() / 1000 };
+  }
+
+  /** this player moves by walking around the room */
+  bodyMode(p: Player): boolean {
+    const b = this.bodyPos[p.index];
+    return p.human && this.cfg.move === 'body' && !!b && performance.now() / 1000 - b.t < 0.8;
+  }
+
+  /** between points the player is put in place: the room position now maps to that spot */
+  private anchorBody(p: Player) {
+    const b = this.bodyPos[p.index];
+    if (b) this.bodyAnchor[p.index] = { px: b.x, pz: b.z, cx: p.pos.x, cz: p.pos.z };
+  }
+
+  /** where the room position puts the player on court (a step in the room is ~2.3 on court) */
+  private bodyTarget(p: Player): THREE.Vector3 | null {
+    const b = this.bodyPos[p.index], a = this.bodyAnchor[p.index];
+    if (!b || !a) return null;
+    const G = 2.3;
+    // facing the TV is facing the net: right is the player's right, forward is toward the net
+    const t = new THREE.Vector3(a.cx + p.side * (b.x - a.px) * G, 0, a.cz - p.side * (b.z - a.pz) * G);
+    t.x = THREE.MathUtils.clamp(t.x, -FLOOR_HX + 0.4, FLOOR_HX - 0.4);
+    return t;
   }
 
   get human(): Player {
@@ -241,6 +276,7 @@ export class Game {
       case 'pointOver': this.pointOver(dt); break;
       case 'matchOver': this.idlePlayers(dt); break;
     }
+    if (this.state !== 'rally') for (const p of this.players) if (this.bodyMode(p)) this.anchorBody(p);
     if (!this.ball.frozen) {
       const ev = this.ball.step(dt);
       for (const e of ev) this.onBallEvent(e);
@@ -416,7 +452,7 @@ export class Game {
     const events = pr.events.slice();
     if (this.bouncesAfterHit > 0 && this.bounceSide === p.side) events.unshift({ kind: 'bounce', x: b.p.x, z: b.p.z, t: -0.01, speed: 0, vy: 0 });
     // the two-bounce rule: the serve and the return must bounce
-    const plan = p.planIntercept(pr.pts, events, this.clock, this.strikes >= 3);
+    const plan = this.bodyMode(p) ? p.planReach(pr.pts, events, this.clock, this.strikes >= 3) : p.planIntercept(pr.pts, events, this.clock, this.strikes >= 3);
     if (!plan) return;
     if (p.plan && p.plan.swung) {
       const moved = plan.ball.distanceTo(p.plan.ball);
@@ -459,6 +495,12 @@ export class Game {
   }
 
   private move(p: Player, dt: number, receiving: boolean) {
+    if (this.bodyMode(p)) {
+      // the player is wherever you are (with a real body's acceleration and top speed)
+      const t = this.bodyTarget(p);
+      p.drive(dt, t ? p.seek(t, 1) : new THREE.Vector3());
+      return;
+    }
     let target: THREE.Vector3 | null = null;
     let urgency = 1;
     if (receiving && p.plan && !this.dead) target = p.plan.body;
@@ -599,7 +641,8 @@ export class Game {
     const dh = Math.hypot(ideal.x - b.x, ideal.z - b.z);
     const dy = Math.abs(b.y - plan.ball.y);
     p.plan = null;
-    const reach = p.human ? 1.9 : 1.1, reachY = p.human ? 1.4 : 0.9;
+    const body = this.bodyMode(p);
+    const reach = body ? 0.95 : p.human ? 1.9 : 1.1, reachY = body ? 0.8 : p.human ? 1.4 : 0.9;
     if (dh > reach || dy > reachY || b.y > 2.8 || b.y < 0.04) {
       this.missed[p.index] = true;
       this.say(`miss ${this.names[p.index]} dh=${dh.toFixed(2)} dy=${dy.toFixed(2)} y=${b.y.toFixed(2)}`);
@@ -615,7 +658,7 @@ export class Game {
       // at full stretch (the run got there late) the contact is weaker
       if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
       // off the sweet spot: the ball came in away from where the paddle wanted it
-      quality *= 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
+      quality *= body ? 1 - Math.min(0.6, Math.max(0, dh - 0.3) * 0.9) : 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
       // a hard ball leaves no margin: a block of a smash has to be timed
       if (inSpeed > 16) quality *= 1 - Math.min(0.6, ((inSpeed - 16) / 10) * (Math.max(0, Math.abs(err) - 0.04) / 0.08));
       const i = p.index;
@@ -630,6 +673,15 @@ export class Game {
       this.hud.timing(Math.abs(err) < 0.07 ? 'Perfect' : err < 0 ? 'Early' : 'Late', p.index, p.shot?.label ?? '');
     } else quality = THREE.MathUtils.clamp(1 - Math.max(0, dh - 0.3) / 0.85 - dy * 0.3, 0.2, 1);
     if (plan.lunge) quality *= 0.85;
+    // a volley with a foot in the kitchen is a fault (you walked in)
+    if (body && plan.volley && Math.abs(p.pos.z) <= NVZ) {
+      this.dead = true;
+      this.committed[p.index] = null;
+      this.say(`kitchen ${this.names[p.index]}`);
+      this.hud.call('Kitchen', 'Volleyed with a foot in the kitchen', 1.6);
+      this.pendingPoint = { winner: (1 - p.index) as 0 | 1, reason: 'kitchen', at: this.clock + 0.6 };
+      return;
+    }
     this.strike(p, ballV, quality, plan);
     this.committed[p.index] = null;
   }
@@ -721,8 +773,8 @@ export class Game {
     else if (absorb > 0 && Math.random() < absorb * (1.1 - quality) * 0.9) forced = 'pop';
     // a mistimed swing at a smash just gets a frame on it
     else if (p.human && inSpeed > 17 && quality < 0.6 && Math.random() < 0.55) forced = 'pop';
-    // a badly mistimed swing: framed into the net, or a hard one sails
-    else if (p.human && quality < 0.55 && Math.random() < (0.55 - quality) * 1.3) forced = pw > 0.55 && Math.random() < 0.6 ? 'long' : 'net';
+    // a swing that barely meets it: off the frame
+    else if (p.human && quality < 0.4 && Math.random() < (0.4 - quality) * 1.2) forced = 'net';
     let tx = aimX * (HW - 0.45);
     if (forced === 'long') depth = HL + 0.3 + Math.random() * 1.2;
     if (forced === 'wide') tx = Math.sign(tx || Math.random() - 0.5) * (HW + 0.2 + Math.random() * 0.8);
@@ -740,9 +792,51 @@ export class Game {
     // a wide or long miss still clears the net (a touch shot finds the pace for it)
     if ((forced === 'wide' || forced === 'long') && !spec.soft) spec.commit = true;
     const sol = solveShot({ x: contact.x, y: contact.y, z: contact.z }, target, spec);
+    if (p.human && !forced) {
+      // the ball comes off the paddle the phone swung: what the shot wanted is only the stroke's
+      // intent (the face a player would present for it); the face error, the swing path and the
+      // incoming ball decide the rest
+      const out = this.paddleStrike(p, plan, sol.v, quality, shot.rpm ?? 0);
+      sol.v = out.v;
+      sol.w = out.w;
+    }
     this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
     this.launch(p, { x: contact.x, y: contact.y, z: contact.z }, sol.v, sol.w, type, power, quality);
     p.shot = null;
+  }
+
+  /**
+   * A human's stroke through the impact model. The face starts square to the shot the swing asked
+   * for (players learn their face angles); then it's off by the timing (a mistimed contact meets
+   * the face early or late in its turn) and by how the phone's face read, and the paddle travels
+   * along the swing path: brushing up or chopping down across the face, which is the spin. The
+   * learned part only pulls the result `assist` of the way back toward the intent.
+   */
+  private paddleStrike(p: Player, plan: Plan, want: { x: number; y: number; z: number }, quality: number, rpm: number): { v: { x: number; y: number; z: number }; w: { x: number; y: number; z: number } } {
+    const vIn = { ...this.ball.v }, wIn = { ...this.ball.w };
+    const flat = faceFor(vIn, want);
+    const across = norm({ x: -want.z, y: 0, z: want.x }); // horizontal, across the flight
+    const up = { x: 0, y: 1, z: 0 };
+    const cm = this.committed[p.index];
+    const err = cm?.err ?? 0;
+    // the face: tilted (pitch) and turned (yaw) off square
+    const open = cm?.swing.face == null ? 0 : (plan.forehand ? cm.swing.face : -cm.swing.face);
+    const pitchErr = gauss() * (0.012 + (1 - quality) * 0.09) + THREE.MathUtils.clamp(open - 0.25, -1, 1) * 0.035;
+    const yawErr = gauss() * (0.015 + (1 - quality) * 0.07) + (plan.forehand ? 1 : -1) * err * 0.25;
+    let n = rotate(flat.n, across, pitchErr);
+    n = rotate(n, up, yawErr);
+    // the path: brushing up for topspin, under for slice (a lift of 1 ≈ 35° across the face);
+    // players swing a little harder along a brushed path to keep the pace
+    const brush = THREE.MathUtils.clamp(rpm / 2600, -0.9, 1) * 0.6;
+    const path = rotate(n, across, brush);
+    const speed = flat.speed / Math.max(0.7, Math.cos(brush) * 0.6 + 0.4) * (1 + gauss() * 0.03 * (1.4 - quality));
+    const u = { x: path.x * speed, y: path.y * speed, z: path.z * speed };
+    const hit = impact(vIn, wIn, u, n);
+    // what practice gives back: part of the way toward the intended launch
+    const assist = this.cfg.move === 'body' ? 0.45 : 0.6;
+    const v = hit.v, sp = len(v);
+    const dir = norm({ x: v.x + (want.x / len(want) * sp - v.x) * assist, y: v.y + (want.y / len(want) * sp - v.y) * assist, z: v.z + (want.z / len(want) * sp - v.z) * assist });
+    return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w: hit.w };
   }
 
   // ------------------------------------------------------------------------------------ ball events

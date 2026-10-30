@@ -74,7 +74,7 @@ export interface BodyLook {
   glasses?: boolean;
 }
 
-const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _one = new THREE.Vector3(1, 1, 1);
 
 export class Puppet {
   readonly root: THREE.Group;
@@ -85,6 +85,9 @@ export class Puppet {
   readonly paddle: THREE.Object3D;
   private tHand!: THREE.Bone;
   private sHand: THREE.Bone;
+  /** the paddle in this hand's frame: the handle through the closed fist */
+  private gripPos = new THREE.Vector3();
+  private gripQuat = new THREE.Quaternion();
   private scale = 1;
 
   /** caps, visors, headbands, sunglasses: built in the world at the bind pose, then parented to the head */
@@ -181,6 +184,8 @@ export class Puppet {
     this.hipRatio = tb.Hips.getWorldPosition(_v).y / Math.max(0.5, sb.Bip01_Pelvis.getWorldPosition(_w).y);
     // headwear: fitted in the scan's own T-pose (head upright, facing +z), then carried by the head bone
     if (tb.Head) this.dress(tb.Head, tb.head_end, look);
+    // the scan's T-pose has the palms down: remember the paddle hand's frame there
+    const tPoseHand = tb.RightHand?.getWorldQuaternion(new THREE.Quaternion());
     // 1. bend the T-pose onto the A-pose, limb by limb (parents first)
     for (const [tn, , tc, sc] of MAP) {
       const t = tb[tn];
@@ -193,6 +198,8 @@ export class Puppet {
       setWorldQuat(t, turn.multiply(qw));
       t.updateMatrixWorld(true);
     }
+    // the paddle hand closes around the handle; the paddle sits in that fist
+    if (tPoseHand) this.closeHand(scene, tPoseHand, tb.RightHand, tb.RightForeArm);
     // 2. remember both binds
     for (const [tn, sn] of MAP) {
       const t = tb[tn], s = sb[sn];
@@ -210,6 +217,145 @@ export class Puppet {
     // the Rocketbox body is now only a skeleton
     src.body.visible = false;
     src.inner.children.forEach((c) => { if ((c as THREE.SkinnedMesh).isSkinnedMesh) c.visible = false; });
+  }
+
+  /**
+   * The scan's hands are open (the auto-rig has no finger bones), so the paddle hand is closed
+   * in the mesh: past the knuckles every vertex is wrapped around the handle's axis, keeping its
+   * length along the finger and its thickness off the palm — a handshake grip. Done once per
+   * shared geometry, in the aligned bind pose; the paddle's frame in the hand is set to match.
+   */
+  private closeHand(scene: THREE.Group, tPoseHand: THREE.Quaternion, tHand: THREE.Bone, tFore: THREE.Bone | undefined) {
+    // the game's paddle at the Rocketbox bind: its shaft and face directions are the stroke maths'
+    this.srcPaddle.updateWorldMatrix(true, false);
+    const pq = this.srcPaddle.getWorldQuaternion(new THREE.Quaternion());
+    const shaft = new THREE.Vector3(0, 1, 0).applyQuaternion(pq);
+    const face = new THREE.Vector3(0, 0, 1).applyQuaternion(pq);
+    const W = tHand.getWorldPosition(new THREE.Vector3());
+    // the limb alignment only turned the hand onto the Rocketbox hand's direction, not its roll:
+    // roll it about the forearm line so its palm faces where the Rocketbox palm (the paddle face) does
+    {
+      const dl = tFore ? W.clone().sub(tFore.getWorldPosition(new THREE.Vector3())).normalize() : null;
+      if (dl) {
+        const qa = tHand.getWorldQuaternion(new THREE.Quaternion());
+        const palmN = new THREE.Vector3(0, -1, 0).applyQuaternion(qa.clone().multiply(tPoseHand.clone().invert()));
+        const p0 = palmN.addScaledVector(dl, -palmN.dot(dl)).normalize();
+        const f0 = face.clone().addScaledVector(dl, -face.dot(dl)).normalize();
+        const ang = Math.atan2(new THREE.Vector3().crossVectors(p0, f0).dot(dl), p0.dot(f0));
+        setWorldQuat(tHand, new THREE.Quaternion().setFromAxisAngle(dl, ang).multiply(qa));
+        tHand.updateMatrixWorld(true);
+      }
+    }
+    let mesh: THREE.SkinnedMesh | null = null;
+    scene.traverse((o) => { if (!mesh && (o as THREE.SkinnedMesh).isSkinnedMesh) mesh = o as THREE.SkinnedMesh; });
+    const sm = mesh as THREE.SkinnedMesh | null;
+    const hi = sm ? sm.skeleton.bones.indexOf(tHand) : -1;
+    if (!sm || hi < 0) return;
+    sm.updateMatrixWorld(true);
+    sm.skeleton.update();
+    const g = sm.geometry;
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    const si = g.getAttribute('skinIndex') as THREE.BufferAttribute, sw = g.getAttribute('skinWeight') as THREE.BufferAttribute;
+    // the hand's vertices (mostly on the hand bone), posed
+    const idx: number[] = [], world: THREE.Vector3[] = [];
+    for (let i = 0; i < pos.count; i++) {
+      let w = 0;
+      for (let k = 0; k < 4; k++) if (si.getComponent(i, k) === hi) w += sw.getComponent(i, k);
+      if (w < 0.6) continue;
+      const v = new THREE.Vector3().fromBufferAttribute(pos, i);
+      sm.applyBoneTransform(i, v);
+      v.applyMatrix4(sm.matrixWorld);
+      idx.push(i);
+      world.push(v);
+    }
+    if (idx.length < 20) return;
+    // the hand's frame: fingers along the forearm → hand line, the palm toward the paddle's face side
+    const d = tFore ? W.clone().sub(tFore.getWorldPosition(new THREE.Vector3())).normalize() : shaft.clone();
+    let along = 0;
+    for (const v of world) along = Math.max(along, v.clone().sub(W).dot(d));
+    const knuckle = along * 0.5;
+    // the palm's surface: the face-side extreme of the palm (wrist → knuckles)
+    const palm = new THREE.Vector3();
+    let n = 0, deep = -Infinity;
+    for (const v of world) {
+      const s = v.clone().sub(W).dot(d);
+      if (s < along * 0.15 || s > knuckle) continue;
+      palm.add(v); n++;
+      deep = Math.max(deep, v.clone().sub(W).dot(face));
+    }
+    if (!n) return;
+    palm.divideScalar(n);
+    // the handle: along the paddle's shaft, a handle's radius off the palm
+    const a = shaft.clone().addScaledVector(d, -shaft.dot(d) * 0.4).normalize();
+    // (across the base of the fingers, just short of the knuckles, as a real grip has it)
+    const G = palm.clone().addScaledVector(face, deep - palm.clone().sub(W).dot(face) + 0.015);
+    G.addScaledVector(d, knuckle - 0.014 - G.clone().sub(W).dot(d));
+    // the paddle in the hand's frame (its orientation as the game's paddle has it at bind)
+    const hq = tHand.getWorldQuaternion(new THREE.Quaternion());
+    const origin = G.clone().addScaledVector(shaft, -0.06);
+    this.gripPos.copy(origin.sub(W).applyQuaternion(hq.clone().invert()).divideScalar(this.root.scale.x));
+    this.gripQuat.copy(hq.clone().invert().multiply(pq));
+    if (g.userData.handClosed) return;
+    g.userData.handClosed = true;
+    // wrap: the finger direction turns about the handle axis, toward the palm
+    const inv = new THREE.Matrix4(), fwdM = new THREE.Matrix4();
+    const nrm = g.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    const skinM = new THREE.Matrix4(), tmp = new THREE.Matrix4();
+    const bones = sm.skeleton.bones, binv = sm.skeleton.boneInverses;
+    // the fingers' mid-line radius about the handle at the knuckles: every vertex of a finger
+    // turns by the same angle for the same length, so the finger keeps its section
+    const radii: number[] = [];
+    for (const v of world) {
+      const s = v.clone().sub(W).dot(d) - knuckle;
+      if (s < 0 || s > 0.015) continue;
+      const rel = v.clone().addScaledVector(d, -s).sub(G);
+      radii.push(rel.addScaledVector(a, -rel.dot(a)).length());
+    }
+    radii.sort((x, y) => x - y);
+    const rMid = Math.max(0.02, radii[radii.length >> 1] ?? 0.03);
+    const meshInv = sm.matrixWorld.clone().invert();
+    for (let j = 0; j < idx.length; j++) {
+      const v = world[j];
+      const s = v.clone().sub(W).dot(d) - knuckle;
+      if (s <= 0) continue;
+      const rel0 = v.clone().addScaledVector(d, -s).sub(G);
+      const ax = rel0.dot(a);
+      const perp = rel0.clone().addScaledVector(a, -ax);
+      const r = Math.max(0.012, perp.length());
+      // the sense of turning that starts the finger off along d
+      const sense = new THREE.Vector3().crossVectors(a, perp).dot(d) > 0 ? 1 : -1;
+      // over the first joint the finger closes onto the handle (a radius of handle + half a finger),
+      // keeping its own thickness about the mid-line
+      const k = Math.min(1, s / 0.03), kk = k * k * (3 - 2 * k);
+      const rNow = rMid + (0.027 - rMid) * kk;
+      const th = Math.min(3.6, s / (rMid + (0.027 - rMid) * Math.min(1, kk * 0.8)));
+      const radial = perp.normalize().multiplyScalar(Math.max(0.017, rNow + (r - rMid)));
+      const np = G.clone().addScaledVector(a, ax).add(radial.applyAxisAngle(a, sense * th));
+      // back to the geometry's bind space through this vertex's own skinning
+      const i = idx[j];
+      skinM.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      for (let k = 0; k < 4; k++) {
+        const w = sw.getComponent(i, k);
+        if (!w) continue;
+        const b = si.getComponent(i, k);
+        tmp.multiplyMatrices(bones[b].matrixWorld, binv[b]);
+        for (let e = 0; e < 16; e++) skinM.elements[e] += tmp.elements[e] * w;
+      }
+      // world = matrixWorld · bindMatrixInverse · skin · bindMatrix · v
+      fwdM.copy(sm.matrixWorld).multiply(sm.bindMatrixInverse).multiply(skinM).multiply(sm.bindMatrix);
+      inv.copy(fwdM).invert();
+      np.applyMatrix4(inv);
+      pos.setXYZ(i, np.x, np.y, np.z);
+      // the normal turns with it
+      if (nrm) {
+        const nv = new THREE.Vector3().fromBufferAttribute(nrm, i).transformDirection(fwdM).applyAxisAngle(a, sense * th).transformDirection(inv);
+        nrm.setXYZ(i, nv.x, nv.y, nv.z);
+      }
+    }
+    pos.needsUpdate = true;
+    if (nrm) nrm.needsUpdate = true;
+    g.computeBoundingSphere();
+    void meshInv;
   }
 
   /** copy the Rocketbox pose onto the body (call after the rig / a replay frame has posed it) */
@@ -233,10 +379,10 @@ export class Puppet {
       p.t.quaternion.copy(_q2.multiply(_q));
       p.t.updateMatrixWorld(true);
     }
-    // the paddle: the hidden hand's grip, moved onto this hand
-    this.srcPaddle.updateWorldMatrix(true, false);
-    const off = this.tHand.getWorldPosition(_v).sub(this.sHand.getWorldPosition(_w));
-    this.paddle.matrix.copy(_m.makeTranslation(off.x, off.y, off.z).multiply(this.srcPaddle.matrixWorld));
+    // the paddle: in this hand's fist, turned as the hidden hand turns the game's paddle
+    const hq = this.tHand.getWorldQuaternion(_q);
+    const hp = this.tHand.getWorldPosition(_v).add(_w.copy(this.gripPos).multiplyScalar(this.scale).applyQuaternion(hq));
+    this.paddle.matrix.compose(hp, _q2.copy(hq).multiply(this.gripQuat), _one);
     this.paddle.matrixWorld.copy(this.paddle.matrix);
   }
 }

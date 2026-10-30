@@ -8,10 +8,12 @@ export interface MenuChoice {
   format: string;
   sky: string;
   players: string;
+  move: string;
 }
 
 const OPTIONS: Record<keyof MenuChoice, { label: string; items: [string, string][] }> = {
   players: { label: 'Players', items: [['1', 'You vs CPU'], ['2', 'Head to head']] },
+  move: { label: 'Moving', items: [['auto', 'AI moves you'], ['body', 'You move']] },
   level: { label: 'Opponent', items: [['rookie', 'Rookie'], ['club', 'Club'], ['pro', 'Pro'], ['legend', 'Legend']] },
   format: { label: 'Game', items: [['classic11', 'Classic to 11'], ['rally15', 'Rally to 15'], ['quick7', 'Quick to 7'], ['bo3', 'Best of 3']] },
   sky: { label: 'Time', items: [['sunset', 'Golden hour'], ['day', 'Midday'], ['night', 'Under lights']] },

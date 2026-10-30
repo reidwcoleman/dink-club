@@ -24,6 +24,14 @@ struct PaddleView: View {
                 Text(link.text)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.75))
+                if link.tracking {
+                    Text("You move: walk and step to reach the ball")
+                        .font(.system(size: 14)).foregroundStyle(.white.opacity(0.5)).padding(.top, 4)
+                    Button("Face the TV and tap to recenter") { link.tracker.recenter() }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.75, green: 0.95, blue: 0.2))
+                        .padding(.top, 10)
+                }
                 Button("Leave", action: onLeave)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.white.opacity(0.45))
@@ -31,7 +39,7 @@ struct PaddleView: View {
             }
         }
         .onChange(of: link.ended) { e in if e { onLeave() } }
-        .onDisappear { link.motion.stop() }
+        .onDisappear { link.motion.stop(); link.tracker.stop() }
     }
 }
 
@@ -41,6 +49,8 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     @Published var pulse = false
     @Published var text = "Connecting…"
     @Published var ended = false
+    @Published var tracking = false
+    let tracker = RoomTracker()
     weak var web: WKWebView?
     let motion = SwingDetector()
     private let hit = UIImpactFeedbackGenerator(style: .rigid)
@@ -57,6 +67,9 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
             self.pulse = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
         }
+        tracker.onPos = { [weak self] x, z in
+            self?.web?.evaluateJavaScript(String(format: "window.__nativePos && window.__nativePos({x:%.4f,z:%.4f})", x, z))
+        }
     }
 
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -67,6 +80,10 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
             hit.prepare(); hard.prepare()
         case "recenter":
             motion.recenter()
+        case "track":
+            let on = (m["on"] as? Bool) ?? false
+            if on && RoomTracker.supported { tracker.start(); tracking = true }
+            else { tracker.stop(); tracking = false }
         case "status":
             switch m["state"] as? String {
             case "live": live = true; text = "Paddle ready · swing away"; note.notificationOccurred(.success)

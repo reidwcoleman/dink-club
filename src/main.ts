@@ -51,6 +51,7 @@ const choice: MenuChoice = {
   format: params.get('format') ?? 'classic11',
   sky: params.get('sky') ?? 'sunset',
   players: params.get('players') ?? '1',
+  move: params.get('move') ?? 'auto',
 };
 const menu = new Menu(ui, choice);
 menu.busy(true);
@@ -76,6 +77,7 @@ lobby.onSwing = (slot, s) => {
   if (!inMatch) menu.swingTest(slot, s.power);
   if (summaryEl && game?.match?.winner !== null) rematch();
 };
+lobby.onPos = (slot, x, z) => game?.setBodyPos(slot, x, z);
 lobby.onTap = (slot, what) => {
   audio.start();
   if (what === 'start' && !inMatch && !menu.root.classList.contains('busy')) void play(choice);
@@ -86,6 +88,7 @@ lobby.onTap = (slot, what) => {
 void lobby.open();
 
 function sendState(slot: number) {
+  lobby.send(slot, { t: 'mode', move: choice.move === 'body' ? 'body' : 'auto' });
   if (!inMatch) lobby.send(slot, { t: 'state', text: 'Connected', sub: slot === 0 ? 'Start the game on the TV — or tap Play' : 'You’re player 2', serve: false });
 }
 
@@ -132,7 +135,7 @@ async function play(c: MenuChoice, demo = false) {
   let far = (near + 1 + Math.floor(Math.random() * (ROSTER.length - 1))) % ROSTER.length;
   if (far === near) far = (near + 1) % ROSTER.length;
   const names: [string, string] = [lobby.name(0) ?? (demo ? ROSTER[near].name : 'You'), two ? lobby.name(1) ?? 'Player 2' : ROSTER[far].name];
-  await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
+  await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo, move: c.move === 'body' ? 'body' : 'auto' }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
   world.scene.environment = null;
   world.sky.captureEnv(world.dynamic);
   menu.hide();
@@ -159,6 +162,7 @@ menu.onChange = (key, c) => {
   audio.start();
   audio.music(1);
   if (key === 'sky') void world.setSky(c.sky as SkyName);
+  if (key === 'move') lobby.broadcast({ t: 'mode', move: c.move === 'body' ? 'body' : 'auto' });
 };
 // browsers keep audio off until someone clicks or presses a key on the TV's page
 let soundOn = false;

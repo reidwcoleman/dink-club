@@ -15,6 +15,8 @@ export type PadMsg =
   | { t: 'hello'; id: string; name: string; paddle: number }
   | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null }
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
+  /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
+  | { t: 'pos'; x: number; z: number }
   | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
@@ -25,7 +27,9 @@ export type TvMsg =
   | { t: 'whiff' }
   | { t: 'point'; won: boolean; call: string }
   | { t: 'ping'; k: number }
-  | { t: 'full' };
+  | { t: 'full' }
+  /** how this game moves the players: 'body' asks the app to track where the phone is in the room */
+  | { t: 'mode'; move: 'auto' | 'body' };
 
 export const SLOT_COLORS = ['#ff8a1f', '#2fc4c0'];
 
@@ -47,6 +51,7 @@ export class Lobby {
   status: 'connecting' | 'ready' | 'offline' = 'connecting';
   onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
+  onPos: ((slot: number, x: number, z: number) => void) | null = null;
   onChange: (() => void) | null = null;
   private pingK = 0;
 
@@ -147,6 +152,10 @@ export class Lobby {
       }
       if (slot < 0 || this.slots[slot]?.conn !== conn) return;
       const s = this.slots[slot]!;
+      if (m.t === 'pos') {
+        if (Number.isFinite(m.x) && Number.isFinite(m.z)) this.onPos?.(slot, Math.max(-20, Math.min(20, m.x)), Math.max(-20, Math.min(20, m.z)));
+        return;
+      }
       if (m.t === 'swing') {
         // when it peaked, on the TV's clock: from the phone's own timestamp and the synced offset
         // (falls back to arrival − half the round trip − how long the phone took to confirm the peak)

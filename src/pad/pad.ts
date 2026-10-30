@@ -183,6 +183,10 @@ function onTv(m: TvMsg) {
     case 'ping':
       send({ t: 'pong', k: m.k, tp: performance.now() / 1000 });
       break;
+    case 'mode':
+      toNative({ t: 'track', on: m.move === 'body' });
+      if (m.move === 'body' && !native) setMsg('“You move” needs the Dink Club app', 'The computer will move you');
+      break;
     case 'full':
       setMsg('The court is full', 'Two paddles are already connected');
       linkStatus('full');
@@ -402,6 +406,16 @@ addEventListener('keydown', (e) => { if (e.code === 'Space' && connected) { send
   const now = performance.now() / 1000;
   send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago });
   meter(w.power);
+};
+
+/** the app's camera tracking: where the phone is in the room (for "you move") — sent ~25 times a second */
+let lastPos = 0;
+(window as unknown as Record<string, unknown>).__nativePos = (q: { x: number; z: number }) => {
+  if (!connected) return;
+  const now = performance.now();
+  if (now - lastPos < 38) return;
+  lastPos = now;
+  send({ t: 'pos', x: Math.round(q.x * 1000) / 1000, z: Math.round(q.z * 1000) / 1000 });
 };
 
 // the app passes the room (from its QR scanner) and the name: go straight in
