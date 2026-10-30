@@ -94,8 +94,10 @@ export class Game {
   private perfects = [0, 0];
   private hot = [false, false];
   private prevBall = new THREE.Vector3();
+  /** soft contact shadows under the players (where the sun's shadow map is too coarse to ground the feet) */
+  private contact: THREE.Mesh[] = [];
   /** "you move" mode: each phone's position in the room (m, right / toward the TV) and when it came */
-  private bodyPos: ({ x: number; z: number; t: number } | null)[] = [null, null];
+  private bodyPos: ({ x: number; z: number; vx: number; vz: number; t: number } | null)[] = [null, null];
   /** the room position that maps to where the player stood when the point started */
   private bodyAnchor: ({ px: number; pz: number; cx: number; cz: number } | null)[] = [null, null];
   private hitStop = 0;
@@ -143,6 +145,24 @@ export class Game {
     this.players = [await make(a, 0, !cfg.demo, paddles[0]), await make(b, 1, cfg.players === 2 && !cfg.demo, paddles[1])];
     this.players[0].side = 1;
     this.players[1].side = -1;
+    if (!this.contact.length) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(0,0,0,0.75)');
+      gr.addColorStop(0.5, 'rgba(0,0,0,0.35)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 64, 64);
+      const mat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.55, toneMapped: false });
+      for (let i = 0; i < 2; i++) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
+        m.renderOrder = 2;
+        this.world.scene.add(m);
+        this.contact.push(m);
+      }
+    }
     this.names = names;
     this.replay = new Replay(this.players, this.ballView.mesh);
     this.hud.names = this.names;
@@ -152,8 +172,8 @@ export class Game {
   }
 
   /** a phone's position in the room (the app's camera tracking) */
-  setBodyPos(slot: number, x: number, z: number) {
-    this.bodyPos[slot] = { x, z, t: performance.now() / 1000 };
+  setBodyPos(slot: number, x: number, z: number, vx = 0, vz = 0) {
+    this.bodyPos[slot] = { x, z, vx, vz, t: performance.now() / 1000 };
   }
 
   /** this player moves by walking around the room */
@@ -172,9 +192,12 @@ export class Game {
   private bodyTarget(p: Player): THREE.Vector3 | null {
     const b = this.bodyPos[p.index], a = this.bodyAnchor[p.index];
     if (!b || !a) return null;
-    const G = 2.3;
+    const G = 2.5;
+    // where you are now: the last report led by your walking speed over its age (the link + filter delay)
+    const lead = Math.min(0.15, performance.now() / 1000 - b.t + 0.05);
+    const bx = b.x + b.vx * lead, bz = b.z + b.vz * lead;
     // facing the TV is facing the net: right is the player's right, forward is toward the net
-    const t = new THREE.Vector3(a.cx + p.side * (b.x - a.px) * G, 0, a.cz - p.side * (b.z - a.pz) * G);
+    const t = new THREE.Vector3(a.cx + p.side * (bx - a.px) * G, 0, a.cz - p.side * (bz - a.pz) * G);
     t.x = THREE.MathUtils.clamp(t.x, -FLOOR_HX + 0.4, FLOOR_HX - 0.4);
     return t;
   }
@@ -297,6 +320,7 @@ export class Game {
       p.puppet?.update();
       this.footSounds(p, dt);
     }
+    this.groundPlayers();
     // the ball rests in the server's hand until the drop
     if (this.ball.frozen && (this.state === 'preServe' || (this.state === 'serving' && this.serve && !this.serve.released))) {
       const S = this.players[this.serverIdx];
@@ -642,7 +666,7 @@ export class Game {
     const dy = Math.abs(b.y - plan.ball.y);
     p.plan = null;
     const body = this.bodyMode(p);
-    const reach = body ? 0.95 : p.human ? 1.9 : 1.1, reachY = body ? 0.8 : p.human ? 1.4 : 0.9;
+    const reach = body ? 1.05 : p.human ? 1.9 : 1.1, reachY = body ? 0.8 : p.human ? 1.4 : 0.9;
     if (dh > reach || dy > reachY || b.y > 2.8 || b.y < 0.04) {
       this.missed[p.index] = true;
       this.say(`miss ${this.names[p.index]} dh=${dh.toFixed(2)} dy=${dy.toFixed(2)} y=${b.y.toFixed(2)}`);
@@ -825,13 +849,21 @@ export class Game {
     const yawErr = gauss() * (0.015 + (1 - quality) * 0.07) + (plan.forehand ? 1 : -1) * err * 0.25;
     let n = rotate(flat.n, across, pitchErr);
     n = rotate(n, up, yawErr);
+    // off the sweet spot (a mistimed contact is also a misplaced one): the paddle twists in the
+    // hand about the handle and the face gives back less
+    const off = Math.min(0.08, (1 - quality) * 0.07 + Math.abs(gauss()) * 0.006);
+    const twist = (Math.random() < 0.5 ? -1 : 1) * off * 2.6;
+    n = rotate(n, up, twist);
     // the path: brushing up for topspin, under for slice (a lift of 1 ≈ 35° across the face);
     // players swing a little harder along a brushed path to keep the pace
     const brush = THREE.MathUtils.clamp(rpm / 2600, -0.9, 1) * 0.6;
     const path = rotate(n, across, brush);
     const speed = flat.speed / Math.max(0.7, Math.cos(brush) * 0.6 + 0.4) * (1 + gauss() * 0.03 * (1.4 - quality));
-    const u = { x: path.x * speed, y: path.y * speed, z: path.z * speed };
+    // the body's run carries into the stroke
+    const u = { x: path.x * speed + p.vel.x * 0.7, y: path.y * speed, z: path.z * speed + p.vel.z * 0.7 };
     const hit = impact(vIn, wIn, u, n);
+    const dull = 1 - Math.min(0.35, (off / 0.06) ** 2 * 0.3);
+    hit.v.x *= dull; hit.v.y *= dull; hit.v.z *= dull;
     // what practice gives back: part of the way toward the intended launch
     const assist = this.cfg.move === 'body' ? 0.45 : 0.6;
     const v = hit.v, sp = len(v);
@@ -1024,6 +1056,7 @@ export class Game {
     const b = this.ballView.mesh.position;
     const playing = this.replay.step(dt);
     for (const p of this.players) p.puppet?.update();
+    this.groundPlayers();
     this.dir.update(dt, b, this.dir.subject, this.players[1].pos);
     this.onDof?.(true, this.camera.position.distanceTo(b), 3);
     this.world.ballPos.copy(b);
@@ -1041,6 +1074,17 @@ export class Game {
     this.state = 'pointOver';
     this.stateT = 1.4;
     this.dir.cut('broadcast');
+  }
+
+  private groundPlayers() {
+    for (const p of this.players) {
+      const m = this.contact[p.index];
+      if (!m) continue;
+      const r = p.rig.group.position;
+      m.position.set(r.x, 0.012, r.z);
+      m.rotation.y = p.rig.yaw;
+      m.scale.set(0.85, 1, 0.65);
+    }
   }
 
   private idlePlayers(dt: number) {

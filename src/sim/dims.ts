@@ -29,9 +29,9 @@ export function netTop(x: number): number {
 
 export type Surface = 'hard' | 'clay' | 'grass';
 
-/** ball–surface interaction (see Ball.ts): a plastic ball on acrylic is lively off the floor but bites */
+/** ball–surface interaction (see Ball.ts): a plastic ball on acrylic is lively off the floor but bites (the rulebook's drop test: from 78 in it must come back 30–34 in, e ≈ 0.64) */
 export const SURFACE_PHYS: Record<Surface, { e: number; mu: number; keep: number; name: string }> = {
-  hard: { e: 0.68, mu: 0.42, keep: 1.0, name: 'Acrylic' },
+  hard: { e: 0.65, mu: 0.42, keep: 1.0, name: 'Acrylic' },
   clay: { e: 0.66, mu: 0.6, keep: 0.94, name: 'Clay' },
   grass: { e: 0.6, mu: 0.36, keep: 1.0, name: 'Grass' },
 };

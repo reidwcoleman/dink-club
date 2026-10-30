@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GFX } from './gfx.ts';
 // @ts-expect-error n8ao ships without types
 import { N8AOPostPass } from 'n8ao';
 import {
@@ -55,7 +56,8 @@ export class Renderer {
     this.camera = camera;
     this.gl = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      // the TV renders straight to the canvas: hardware MSAA (close to free on a tile-based GPU)
+      antialias: GFX.lite,
       stencil: false,
       depth: true,
       powerPreference: 'high-performance',

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeVertices, mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GFX } from '../render/gfx.ts';
 import { HW, FLOOR_HX, FLOOR_HZ, POST_X, NET_POST } from '../sim/dims.ts';
 import { lin, rng, noiseTexture } from '../render/noise.ts';
@@ -99,6 +99,52 @@ export class Club {
       merged.castShadow = list.some((m) => m.castShadow);
       merged.receiveShadow = list.some((m) => m.receiveShadow);
       merged.renderOrder = list[0].renderOrder;
+      for (const m of list) this.group.remove(m);
+      this.group.add(merged);
+    }
+    if (GFX.lite) this.bakeColors();
+  }
+
+  /**
+   * The TV: every plain-coloured static mesh (no textures, no custom shader, not one that glows at
+   * night) becomes part of one mesh per kind (shadow casting, sidedness), its colour in the vertices.
+   * A TV box's CPU pays per draw call, twice with the shadow pass.
+   */
+  private bakeColors() {
+    const plain = (m: THREE.Material): m is THREE.MeshStandardMaterial => {
+      const s = m as THREE.MeshStandardMaterial;
+      return s.type === 'MeshStandardMaterial' && !s.map && !s.alphaMap && !s.emissiveMap && !s.transparent && !s.alphaTest
+        && s.onBeforeCompile === THREE.Material.prototype.onBeforeCompile && !this.glow.some((g) => g.mat === s);
+    };
+    const groups = new Map<string, THREE.Mesh[]>();
+    for (const o of [...this.group.children]) {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m as unknown as THREE.InstancedMesh).isInstancedMesh || Array.isArray(m.material) || m.children.length || !plain(m.material as THREE.Material)) continue;
+      const key = `${m.castShadow ? 1 : 0}${m.receiveShadow ? 1 : 0}${(m.material as THREE.Material).side}`;
+      const list = groups.get(key) ?? [];
+      list.push(m);
+      groups.set(key, list);
+    }
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      let rough = 0;
+      const geos = list.map((m) => {
+        const mat = m.material as THREE.MeshStandardMaterial;
+        rough += mat.roughness;
+        const g = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrix);
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        const n = g.getAttribute('position').count;
+        const col = new Float32Array(n * 3);
+        // metal reads darker without the environment to reflect: fold that into the colour
+        const k = 1 - mat.metalness * 0.35;
+        for (let i = 0; i < n; i++) { col[i * 3] = mat.color.r * k; col[i * 3 + 1] = mat.color.g * k; col[i * 3 + 2] = mat.color.b * k; }
+        g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        for (const a of Object.keys(g.attributes)) if (a !== 'position' && a !== 'normal' && a !== 'color') g.deleteAttribute(a);
+        return g;
+      });
+      const merged = new THREE.Mesh(mergeGeometries(geos), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: rough / list.length, metalness: 0, side: (list[0].material as THREE.Material).side }));
+      merged.castShadow = list[0].castShadow;
+      merged.receiveShadow = list[0].receiveShadow;
       for (const m of list) this.group.remove(m);
       this.group.add(merged);
     }

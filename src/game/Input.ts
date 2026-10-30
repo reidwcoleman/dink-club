@@ -21,6 +21,10 @@ export interface Swing {
   face?: number | null;
   /** where the face pointed relative to straight ahead (−1 left … +1 right, can exceed), null if unknown */
   aim?: number | null;
+  /** the phone's velocity at the peak (m/s, room frame: x right, y up, z toward the TV), from the app's camera tracking */
+  vel?: number[] | null;
+  /** the hitting face's normal in the room frame */
+  n?: number[] | null;
 }
 
 export class Input {

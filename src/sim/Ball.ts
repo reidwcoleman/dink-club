@@ -7,7 +7,9 @@ import { BALL_R, BALL_M, netTop, POST_X, SURFACE_PHYS, type Surface } from './di
  *  - spin decay (τ ≈ 3 s)
  *  - bounce: vertical restitution per surface; tangential friction impulse that either slides
  *    the whole contact (μ(1+e)|vy|) or grips and rolls out (thin shell, I = ⅔mr²)
- *  - the net: a cord that sags from 36 in at the posts to 34 in in the middle; the tape, or the body of the net
+ *  - the net: a cord that sags from 36 in at the posts to 34 in in the middle, bound in a soft 2 in
+ *    tape — a ball that touches it bounces off a padded cylinder (it can trickle over or fall
+ *    back); one that meets the mesh below is swallowed
  * Vectors are plain {x, y, z} records so the sim runs without three.
  */
 
@@ -21,6 +23,9 @@ export const KD = (0.5 * RHO * CD * A) / BALL_M; // drag: a = −KD |v| v
 export const KL = (0.5 * RHO * A * 0.55) / BALL_M; // lift: a = KL · C_L · |v|² (ŵ×v̂)
 const G = 9.81;
 export const SPIN_TAU = 3;
+/** the net's tape: radius of its padded top, and its restitution */
+const TAPE_R = 0.016;
+const TAPE_E = 0.22;
 
 export type BallEvent =
   | { kind: 'bounce'; x: number; z: number; t: number; speed: number; vy: number }
@@ -37,6 +42,7 @@ export class BallSim {
   frozen = true;
   bounces = 0;
   private prevZ = 0;
+  private lastCord = -1;
 
   set(p: V3, v: V3, w: V3) {
     this.p = { ...p };
@@ -70,33 +76,44 @@ export class BallSim {
     const k = Math.exp(-h / SPIN_TAU);
     w.x *= k; w.y *= k; w.z *= k;
     this.t += h;
-    // net: crossing z = 0 within the posts
+    // the tape: a padded cylinder along the top of the net
+    if (Math.abs(p.x) < POST_X && Math.abs(p.z) < BALL_R + TAPE_R + 0.01) {
+      const top = netTop(p.x) - TAPE_R;
+      const dy = p.y - top, dz = p.z;
+      const d = Math.hypot(dy, dz);
+      if (d < BALL_R + TAPE_R && d > 1e-6) {
+        const nx = dy / d, nz = dz / d;
+        const vn = v.y * nx + v.z * nz;
+        if (vn < 0) {
+          const speed = Math.hypot(v.x, v.y, v.z);
+          // the tape gives: little bounce, a lot of grab along it
+          v.y -= (1 + TAPE_E) * vn * nx;
+          v.z -= (1 + TAPE_E) * vn * nz;
+          const ty = v.y - (v.y * nx + v.z * nz) * nx, tz = v.z - (v.y * nx + v.z * nz) * nz;
+          v.y -= ty * 0.35; v.z -= tz * 0.35; v.x *= 0.8;
+          w.x *= 0.4; w.y *= 0.4; w.z *= 0.4;
+          p.y = top + nx * (BALL_R + TAPE_R);
+          p.z = nz * (BALL_R + TAPE_R);
+          // whether it goes over is the flight's business from here (it may drop back)
+          if (this.t - this.lastCord > 0.05) ev.push({ kind: 'net', x: p.x, y: p.y, t: this.t, cord: true, over: true, speed });
+          this.lastCord = this.t;
+        }
+      }
+    }
+    // the mesh: crossing z = 0 below the tape, within the posts
     if ((pz0 > 0) !== (p.z > 0) && Math.abs(p.x) < POST_X + 0.05) {
       const f = pz0 / (pz0 - p.z);
       const y = p.y - v.y * h * (1 - f);
       const x = p.x - v.x * h * (1 - f);
-      const top = netTop(x);
-      if (y - BALL_R < top) {
+      if (y < netTop(x) - TAPE_R * 2) {
         const speed = Math.hypot(v.x, v.y, v.z);
-        if (y + BALL_R * 0.3 < top) {
-          // into the net: the mesh swallows it
-          p.z = pz0 > 0 ? BALL_R + 0.02 : -BALL_R - 0.02;
-          v.z = -v.z * 0.08;
-          v.x *= 0.25;
-          v.y = Math.min(v.y * 0.3, 0.5);
-          w.x *= 0.2; w.y *= 0.2; w.z *= 0.2;
-          ev.push({ kind: 'net', x, y, t: this.t, cord: false, over: false, speed });
-        } else {
-          // clips the tape: loses pace, pops up; over if its centre was above the cord
-          const over = y > top + BALL_R * 0.1 || Math.random() < 0.35;
-          const keep = 0.35 + Math.random() * 0.3;
-          v.z *= over ? keep : -0.15;
-          v.x *= keep;
-          v.y = Math.abs(v.y) * 0.3 + 0.6 + Math.random() * 1.6;
-          w.x *= 0.4; w.y *= 0.4; w.z *= 0.4;
-          if (!over) p.z = pz0 > 0 ? BALL_R + 0.02 : -BALL_R - 0.02;
-          ev.push({ kind: 'net', x, y, t: this.t, cord: true, over, speed });
-        }
+        // into the net: the mesh swallows it
+        p.z = pz0 > 0 ? BALL_R + 0.02 : -BALL_R - 0.02;
+        v.z = -v.z * 0.08;
+        v.x *= 0.25;
+        v.y = Math.min(v.y * 0.3, 0.5);
+        w.x *= 0.2; w.y *= 0.2; w.z *= 0.2;
+        ev.push({ kind: 'net', x, y, t: this.t, cord: false, over: false, speed });
       }
     }
     this.prevZ = p.z;

@@ -13,10 +13,10 @@ const LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 /** phone → TV */
 export type PadMsg =
   | { t: 'hello'; id: string; name: string; paddle: number }
-  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null }
+  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null; vel?: number[] | null; n?: number[] | null }
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
   /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
-  | { t: 'pos'; x: number; z: number }
+  | { t: 'pos'; x: number; z: number; vx?: number; vz?: number }
   | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
@@ -49,9 +49,9 @@ export class Lobby {
   peer: Peer | null = null;
   readonly slots: (Slot | null)[] = [null, null];
   status: 'connecting' | 'ready' | 'offline' = 'connecting';
-  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null }) => void) | null = null;
+  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
-  onPos: ((slot: number, x: number, z: number) => void) | null = null;
+  onPos: ((slot: number, x: number, z: number, vx: number, vz: number) => void) | null = null;
   onChange: (() => void) | null = null;
   private pingK = 0;
 
@@ -153,7 +153,8 @@ export class Lobby {
       if (slot < 0 || this.slots[slot]?.conn !== conn) return;
       const s = this.slots[slot]!;
       if (m.t === 'pos') {
-        if (Number.isFinite(m.x) && Number.isFinite(m.z)) this.onPos?.(slot, Math.max(-20, Math.min(20, m.x)), Math.max(-20, Math.min(20, m.z)));
+        const c = (v: unknown, k: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-k, Math.min(k, v)) : 0);
+        if (Number.isFinite(m.x) && Number.isFinite(m.z)) this.onPos?.(slot, c(m.x, 20), c(m.z, 20), c(m.vx, 6), c(m.vz, 6));
         return;
       }
       if (m.t === 'swing') {
@@ -165,7 +166,7 @@ export class Lobby {
           const synced = m.tp - off;
           if (synced <= now + 0.02 && synced > now - 0.4) at = synced;
         }
-        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null });
+        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null, vel: vec3(m.vel), n: vec3(m.n) });
       }
       else if (m.t === 'tap') this.onTap?.(slot, m.what);
       else if (m.t === 'pong') {
@@ -205,4 +206,9 @@ export class Lobby {
 
 function clamp01(x: number) {
   return Math.max(0, Math.min(1, +x || 0));
+}
+
+/** a 3-vector from the wire, or null */
+function vec3(v: unknown): number[] | null {
+  return Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x)) ? v.map((x) => Math.max(-30, Math.min(30, x))) : null;
 }

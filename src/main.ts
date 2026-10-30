@@ -73,11 +73,11 @@ lobby.onChange = () => {
 };
 lobby.onSwing = (slot, s) => {
   audio.start();
-  input.push(slot, { at: s.at, power: s.power, lift: s.lift, face: s.face, aim: s.aim, from: 'phone' });
+  input.push(slot, { at: s.at, power: s.power, lift: s.lift, face: s.face, aim: s.aim, vel: s.vel, n: s.n, from: 'phone' });
   if (!inMatch) menu.swingTest(slot, s.power);
   if (summaryEl && game?.match?.winner !== null) rematch();
 };
-lobby.onPos = (slot, x, z) => game?.setBodyPos(slot, x, z);
+lobby.onPos = (slot, x, z, vx, vz) => game?.setBodyPos(slot, x, z, vx, vz);
 lobby.onTap = (slot, what) => {
   audio.start();
   if (what === 'start' && !inMatch && !menu.root.classList.contains('busy')) void play(choice);

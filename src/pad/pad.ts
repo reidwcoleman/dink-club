@@ -401,21 +401,22 @@ function escapeHtml(s: string) {
 addEventListener('keydown', (e) => { if (e.code === 'Space' && connected) { send({ t: 'swing', power: e.shiftKey ? 0.9 : 0.5, lift: 0, peak: 0 }); meter(0.5); } });
 
 /** the app found a swing peak (its own 100 Hz sensor fusion): forward it like one of ours */
-(window as unknown as Record<string, unknown>).__nativeSwing = (w: { power: number; lift: number; face: number; aim: number | null; ago: number; peak: number }) => {
+(window as unknown as Record<string, unknown>).__nativeSwing = (w: { power: number; lift: number; face: number; aim: number | null; ago: number; peak: number; vel?: number[]; n?: number[] }) => {
   if (!connected) return;
   const now = performance.now() / 1000;
-  send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago });
+  send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago, vel: w.vel ?? null, n: w.n ?? null });
   meter(w.power);
 };
 
 /** the app's camera tracking: where the phone is in the room (for "you move") — sent ~25 times a second */
 let lastPos = 0;
-(window as unknown as Record<string, unknown>).__nativePos = (q: { x: number; z: number }) => {
+(window as unknown as Record<string, unknown>).__nativePos = (q: { x: number; z: number; vx?: number; vz?: number }) => {
   if (!connected) return;
   const now = performance.now();
-  if (now - lastPos < 38) return;
+  if (now - lastPos < 19) return;
   lastPos = now;
-  send({ t: 'pos', x: Math.round(q.x * 1000) / 1000, z: Math.round(q.z * 1000) / 1000 });
+  const r = (v: number | undefined) => Math.round((v ?? 0) * 1000) / 1000;
+  send({ t: 'pos', x: r(q.x), z: r(q.z), vx: r(q.vx), vz: r(q.vz) });
 };
 
 // the app passes the room (from its QR scanner) and the name: go straight in

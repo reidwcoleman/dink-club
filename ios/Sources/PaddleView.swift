@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import CoreMotion
+import simd
 
 /// The paddle and nothing else: the phone's motion is the paddle. A hidden web view carries the
 /// link to the TV (WebRTC); this screen only shows whether the paddle is live and flashes on a swing.
@@ -24,6 +25,11 @@ struct PaddleView: View {
                 Text(link.text)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.75))
+                if !link.trackOK {
+                    Text("Camera tracking lost: keep the back camera uncovered, facing the room")
+                        .font(.system(size: 13)).foregroundStyle(.orange.opacity(0.85))
+                        .multilineTextAlignment(.center).padding(.horizontal, 30).padding(.top, 6)
+                }
                 if link.tracking {
                     Text("You move: walk and step to reach the ball")
                         .font(.system(size: 14)).foregroundStyle(.white.opacity(0.5)).padding(.top, 4)
@@ -39,7 +45,7 @@ struct PaddleView: View {
             }
         }
         .onChange(of: link.ended) { e in if e { onLeave() } }
-        .onDisappear { link.motion.stop(); link.tracker.stop() }
+        .onDisappear { link.motion.stop(); link.tracker.stop(); link.stopTimers() }
     }
 }
 
@@ -50,6 +56,8 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     @Published var text = "Connecting…"
     @Published var ended = false
     @Published var tracking = false
+    @Published var trackOK = true
+    private var okTimer: Timer?
     let tracker = RoomTracker()
     weak var web: WKWebView?
     let motion = SwingDetector()
@@ -59,31 +67,59 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
 
     override init() {
         super.init()
-        motion.onSwing = { [weak self] s in
+        tracker.lastFast = { [weak self] in self?.motion.lastFast ?? 0 }
+        motion.onSwing = { [weak self] s0 in
             guard let self else { return }
-            let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f})",
-                            s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak)
+            var s = s0
+            var extra = ""
+            // the camera tracking's view of the same swing: the real path and the face's direction
+            if let pd = self.tracker.paddle(at: s.t) {
+                let v = pd.vel, sp = simd_length(v)
+                if sp > 0.6 {
+                    // the path's climb or fall is the brush (spin, lobs) — no drifting integral
+                    s = s.with(lift: max(-1, min(1, v.y / sp * 1.8)),
+                               power: min(1, s.power * 0.75 + max(0, min(1, (sp - 0.8) / 5)) * 0.25))
+                }
+                // the hitting face points at the TV (the back of the phone on a backhand)
+                let n = pd.n.z < 0 ? -pd.n : pd.n
+                if abs(n.z) > 0.2 { s = s.with(aim: max(-1.6, min(1.6, atan2(n.x, n.z) / (40 * .pi / 180)))) }
+                extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
+            }
+            let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
+                            s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
             self.web?.evaluateJavaScript(js)
             self.pulse = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
         }
-        tracker.onPos = { [weak self] x, z in
-            self?.web?.evaluateJavaScript(String(format: "window.__nativePos && window.__nativePos({x:%.4f,z:%.4f})", x, z))
+        tracker.onPos = { [weak self] x, z, vx, vz in
+            self?.web?.evaluateJavaScript(String(format: "window.__nativePos && window.__nativePos({x:%.4f,z:%.4f,vx:%.3f,vz:%.3f})", x, z, vx, vz))
         }
     }
+
+    func stopTimers() { okTimer?.invalidate() }
 
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let m = message.body as? [String: Any], let t = m["t"] as? String else { return }
         switch t {
         case "start":
+            okTimer?.invalidate()
+            var bad = 0
+            okTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                bad = self.tracker.ok ? 0 : bad + 1
+                let ok = !RoomTracker.supported || bad < 3
+                if ok != self.trackOK { self.trackOK = ok }
+            }
             motion.start()
+            // the camera tracking reads every swing's path and face (and your steps in "you move")
+            tracker.start()
             hit.prepare(); hard.prepare()
         case "recenter":
             motion.recenter()
         case "track":
             let on = (m["on"] as? Bool) ?? false
-            if on && RoomTracker.supported { tracker.start(); tracking = true }
-            else { tracker.stop(); tracking = false }
+            tracking = on && RoomTracker.supported
+            if tracking { tracker.start() }
         case "status":
             switch m["state"] as? String {
             case "live": live = true; text = "Paddle ready · swing away"; note.notificationOccurred(.success)
@@ -132,14 +168,21 @@ struct LinkWebView: UIViewRepresentable {
 
 /// One swing, measured at its peak.
 struct Swing {
-    let power: Double
-    let lift: Double
-    let face: Double
-    let aim: Double?
+    var power: Double
+    var lift: Double
+    var face: Double
+    var aim: Double?
     let peak: Double
     /// CMLogItem timestamp of the peak (seconds since boot)
     let t: TimeInterval
     func ago() -> Double { max(0, ProcessInfo.processInfo.systemUptime - t) }
+    func with(lift: Double? = nil, power: Double? = nil, aim: Double? = nil) -> Swing {
+        var s = self
+        if let lift { s.lift = lift }
+        if let power { s.power = power }
+        if let aim { s.aim = aim }
+        return s
+    }
 }
 
 /**
@@ -164,6 +207,8 @@ final class SwingDetector {
     private var calmSince: TimeInterval = 0
     private var last: TimeInterval = 0
     private let start0 = 230.0
+    /// the last moment the phone was turning fast (a swing, its backswing or follow-through)
+    private(set) var lastFast: TimeInterval = 0
 
     func start() {
         guard mm.isDeviceMotionAvailable, !mm.isDeviceMotionActive else { return }
@@ -186,6 +231,7 @@ final class SwingDetector {
         last = t
         let r = m.rotationRate
         let g = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot() * 180 / .pi
+        if g > 140 { lastFast = t }
         let up = (x: -m.gravity.x, y: -m.gravity.y, z: -m.gravity.z)
         let aUp = (m.userAcceleration.x * up.x + m.userAcceleration.y * up.y + m.userAcceleration.z * up.z) * 9.81
         vUp = vUp * exp(-dt / (swinging ? 0.6 : 0.15)) + aUp * dt

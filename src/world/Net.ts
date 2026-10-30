@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { netTop, POST_X, NET_POST } from '../sim/dims.ts';
 
 /**
@@ -105,6 +106,29 @@ export class Net {
       const handle = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.09, 0.012), chrome);
       handle.position.set(s * (POST_X + 0.02), 0.58, s * 0.105);
       this.group.add(post, cap, winder, handle);
+    }
+    // everything but the net mesh itself is still: one mesh per material
+    this.group.updateMatrixWorld(true);
+    const byMat = new Map<THREE.Material, THREE.Mesh[]>();
+    for (const o of [...this.group.children]) {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || m === this.mesh) continue;
+      const l = byMat.get(m.material as THREE.Material) ?? [];
+      l.push(m);
+      byMat.set(m.material as THREE.Material, l);
+    }
+    for (const [mat, l] of byMat) {
+      if (l.length < 2) continue;
+      const merged = new THREE.Mesh(mergeGeometries(l.map((m) => {
+        const g = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrix);
+        for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+        if (!g.getAttribute('uv')) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2));
+        return g;
+      })), mat);
+      merged.castShadow = l.some((m) => m.castShadow);
+      merged.receiveShadow = l.some((m) => m.receiveShadow);
+      for (const m of l) this.group.remove(m);
+      this.group.add(merged);
     }
   }
 
