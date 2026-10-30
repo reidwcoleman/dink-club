@@ -37,7 +37,7 @@ export class Court {
     };
     this.uniforms = u;
     // (the TV gets the cheaper standard model: the court is most of the screen's pixels)
-    const m = (GFX.lite ? new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 }) : new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.75, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.8, 0.85, 1.0) })) as THREE.MeshPhysicalMaterial;
+    const m = (GFX.lite ? new THREE.MeshLambertMaterial() : new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.75, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.8, 0.85, 1.0) })) as THREE.MeshPhysicalMaterial;
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
       sh.vertexShader = sh.vertexShader

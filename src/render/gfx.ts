@@ -7,4 +7,6 @@ export const GFX = {
   lambert: false,
   /** lite only: the scenery receives the kept shadow map */
   recv: true,
+  /** lite only: bodies cast planar (flattened) shadows; otherwise a soft quad along the sun */
+  planar: false,
 };

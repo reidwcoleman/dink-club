@@ -239,7 +239,7 @@ export class Puppet {
     // the TV: no live shadow map — the body is flattened onto the court along the sun instead
     if (GFX.lite) {
       scene.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = false; });
-      scene.traverse((o) => {
+      if (GFX.planar) scene.traverse((o) => {
         const m = o as THREE.SkinnedMesh;
         if (!m.isSkinnedMesh || this.planar) return;
         const sh = new THREE.SkinnedMesh(m.geometry, planarShadowMaterial());

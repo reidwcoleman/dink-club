@@ -14,7 +14,8 @@ import { aiChooseShot, aiServe, AI_LEVELS, type Difficulty, type ShotChoice } fr
 import { CameraDirector } from './CameraDirector.ts';
 import { Replay } from './Replay.ts';
 import { PADDLE_ART } from './Racket.ts';
-import { Puppet, type BodyLook } from '../people/Puppet.ts';
+import { Puppet, SUN_RAY, type BodyLook } from '../people/Puppet.ts';
+import { GFX } from '../render/gfx.ts';
 import type { World } from '../world/World.ts';
 import type { Crowd } from '../people/Crowd.ts';
 import type { HUD } from '../ui/HUD.ts';
@@ -96,6 +97,8 @@ export class Game {
   private prevBall = new THREE.Vector3();
   /** soft contact shadows under the players (where the sun's shadow map is too coarse to ground the feet) */
   private contact: THREE.Mesh[] = [];
+  /** the TV: each body's shadow as one soft quad stretched along the sunlight */
+  private sunShadow: THREE.Mesh[] = [];
   /** "you move" mode: each phone's position in the room (m, right / toward the TV) and when it came */
   private bodyPos: ({ x: number; z: number; vx: number; vz: number; t: number } | null)[] = [null, null];
   /** the room position that maps to where the player stood when the point started */
@@ -161,6 +164,16 @@ export class Game {
         m.renderOrder = 2;
         this.world.scene.add(m);
         this.contact.push(m);
+      }
+      if (GFX.lite && !GFX.planar) {
+        const sm = mat.clone();
+        sm.opacity = 0.62;
+        for (let i = 0; i < 2; i++) {
+          const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), sm);
+          m.renderOrder = 2;
+          this.world.scene.add(m);
+          this.sunShadow.push(m);
+        }
       }
     }
     this.names = names;
@@ -1084,6 +1097,14 @@ export class Game {
       m.position.set(r.x, 0.012, r.z);
       m.rotation.y = p.rig.yaw;
       m.scale.set(0.85, 1, 0.65);
+      const s = this.sunShadow[p.index];
+      if (s) {
+        const h = Math.hypot(SUN_RAY.x, SUN_RAY.z) || 1;
+        const len = Math.min(5, 1.75 / Math.max(0.2, -SUN_RAY.y / h));
+        s.position.set(r.x + (SUN_RAY.x / h) * len * 0.45, 0.011, r.z + (SUN_RAY.z / h) * len * 0.45);
+        s.rotation.y = Math.atan2(SUN_RAY.x, SUN_RAY.z);
+        s.scale.set(0.6, 1, len);
+      }
     }
   }
 

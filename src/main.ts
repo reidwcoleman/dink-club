@@ -24,9 +24,12 @@ camera.lookAt(0, 0, 0);
 const onTV = params.get('tv') === '1';
 GFX.lite = onTV || params.get('lite') === '1';
 // (TV tuning switches: ?aa=0, ?lam=1, ?recv=0)
-GFX.aa = params.get('aa') !== '0';
-GFX.lambert = params.get('lam') === '1';
-GFX.recv = params.get('recv') !== '0';
+// measured on the TV (Mali-G52): MSAA, physically based shading and shadow lookups everywhere each
+// cost a fifth of the frame there; the defaults are the fast set
+GFX.aa = params.get('aa') === '1';
+GFX.lambert = params.get('lam') !== '0';
+GFX.recv = params.get('recv') === '1';
+GFX.planar = params.get('planar') === '1';
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
