@@ -176,6 +176,7 @@ export class Renderer {
    * mapping and exposure; a fixed, lower render scale
    */
   lite = false;
+  private liteFrame = 0;
   /** the scene drawn in lite mode (the post chain keeps its own reference) */
   liveScene: THREE.Scene | null = null;
   setLite(on: boolean) {
@@ -183,12 +184,15 @@ export class Renderer {
     const gl = this.gl;
     gl.toneMapping = on ? THREE.NeutralToneMapping : THREE.NoToneMapping;
     gl.shadowMap.type = on ? THREE.PCFShadowMap : gl.shadowMap.type;
-    if (on) { this.adaptive = true; this.minScale = 0.55; this.maxScale = 0.8; this.scale = 0.7; this.resize(); }
+    // a TV's GPU is fill-bound: start lower and let it fall further; shadows re-render every other frame
+    gl.shadowMap.autoUpdate = !on;
+    if (on) { this.adaptive = true; this.minScale = 0.45; this.maxScale = 0.75; this.scale = 0.6; this.resize(); }
   }
 
   render(dt: number) {
     this.gl.info.reset();
     if (this.lite) {
+      if ((this.liteFrame++ & 1) === 0) this.gl.shadowMap.needsUpdate = true;
       this.gl.toneMappingExposure = this.exposure.value;
       this.gl.render(this.liveScene ?? this.scene, this.camera);
       return;

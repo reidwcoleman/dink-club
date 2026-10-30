@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GFX } from '../render/gfx.ts';
 import { HW, FLOOR_HX, FLOOR_HZ, POST_X, NET_POST } from '../sim/dims.ts';
 import { lin, rng, noiseTexture } from '../render/noise.ts';
 import type { Venue } from './venues.ts';
@@ -638,6 +639,7 @@ export class Club {
       uniforms: { uCol: { value: lin('#2a3d33') }, uHaze: { value: lin('#c9a98d') }, uHazeK: { value: 0.35 }, uNoise: { value: noiseTexture() } },
       side: THREE.BackSide,
       fog: false,
+      defines: GFX.lite ? { LITE: 1 } : {},
       vertexShader: /* glsl */ `
         varying vec3 vP;
         void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`,
@@ -648,13 +650,20 @@ export class Club {
         void main() {
           float a = atan( vP.z, vP.x ) / 6.2831853 + 0.5;
           // canopy line: broad hills of trees + bumpy crowns + a few tall palms
-          float h = 7.0 + 9.0 * n1( a * 3.0 ) + 4.0 * n1( a * 23.0 ) + 1.6 * n1( a * 140.0 );
+          float h = 7.0 + 9.0 * n1( a * 3.0 ) + 4.0 * n1( a * 23.0 );
+          #ifndef LITE
+          h += 1.6 * n1( a * 140.0 );
           float palm = smoothstep( 0.78, 0.86, n1( a * 61.0 + 0.3 ) );
           float crown = 1.0 - smoothstep( 0.0, 0.006, abs( fract( a * 61.0 * 9.0 ) - 0.5 ) * 0.04 );
           h += palm * ( 8.0 + 6.0 * n1( a * 400.0 ) ) * ( 0.35 + 0.65 * crown );
+          #endif
           if ( vP.y > h ) discard;
           float t = clamp( vP.y / max( h, 1.0 ), 0.0, 1.0 );
+          #ifdef LITE
+          vec3 c = uCol * ( 0.65 + 0.5 * t );
+          #else
           vec3 c = uCol * ( 0.65 + 0.5 * t ) * ( 0.85 + 0.3 * texture2D( uNoise, vec2( a * 90.0, vP.y * 0.05 ) ).g );
+          #endif
           c = mix( c, uHaze, uHazeK * ( 1.0 - 0.6 * t ) );
           gl_FragColor = vec4( c, 1.0 );
           #include <colorspace_fragment>
@@ -662,7 +671,8 @@ export class Club {
     }) as unknown as THREE.MeshBasicMaterial;
     const m = new THREE.Mesh(g, this.treeMat);
     m.name = 'treeline';
-    m.renderOrder = -5;
+    // after the opaque club: whatever stands in front of it is never shaded
+    m.renderOrder = 1;
     this.group.add(m);
   }
   private treeMat!: THREE.MeshBasicMaterial;

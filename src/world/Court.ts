@@ -44,7 +44,7 @@ export class Court {
         .replace('#include <common>', '#include <common>\nvarying vec3 vCW;')
         .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\n' + COURT_GLSL)
+        .replace('#include <common>', '#include <common>\n' + (GFX.lite ? '#define LITE\n' : '') + COURT_GLSL)
         .replace('#include <map_fragment>', /* glsl */ `
           // one plane paints the whole bank of courts: lines repeat every SPACING across x
           gWorld = vCW.xz;
@@ -146,6 +146,18 @@ vec3 grainNormal( vec2 p, float scale, float k ) {
 
 vec3 courtSurface( vec2 p, float lines, vec3 viewW, out float rough, out vec3 nW ) {
   vec4 nz1 = texture2D( uNoise, gWorld * 0.021 );
+#ifdef LITE
+  // a TV's GPU: the paint's broad variation, the lines and the marks; no grain or scuffs
+  vec4 mk = floorMarks( p );
+  float inside = rect( abs( p ), vec4( -1.0, HW, -1.0, HL ) );
+  float kitchen = rect( abs( p ), vec4( -1.0, HW, -1.0, NVZ ) );
+  vec3 c = mix( mix( uOut, uIn, inside ), uKitchen, kitchen );
+  c *= ( 0.955 + 0.07 * nz1.r ) * ( 1.0 - 0.5 * mk.b );
+  c = mix( c, uLine, lines );
+  rough = mix( 0.58, 0.44, lines );
+  nW = vec3( 0.0, 1.0, 0.0 );
+  return c;
+#else
   vec4 nz2 = texture2D( uNoise, gWorld * 0.13 );
   vec4 nz3 = texture2D( uNoise, gWorld * 0.9 );
   vec4 mk = floorMarks( p );
@@ -206,5 +218,6 @@ vec3 courtSurface( vec2 p, float lines, vec3 viewW, out float rough, out vec3 nW
     nW = grainNormal( p, 2.3, mix( 0.7, 0.3, worn ) );
   }
   return c;
+#endif
 }
 `;
