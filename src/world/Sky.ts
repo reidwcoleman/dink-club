@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SUN_RAY } from '../people/Puppet.ts';
 import { GFX } from '../render/gfx.ts';
 
 export type SkyName = 'day' | 'overcast' | 'sunset' | 'night';
@@ -172,6 +173,7 @@ export class Sky {
     // sun direction in the court frame
     const el = THREE.MathUtils.degToRad(p.elev), az = THREE.MathUtils.degToRad(p.az);
     this.sunDir.set(Math.cos(el) * Math.cos(az), Math.sin(el), -Math.cos(el) * Math.sin(az)).normalize();
+    SUN_RAY.copy(this.sunDir).negate();
     // yaw the dome so the HDRI's sun sits on the same azimuth (world azimuth = atan2(z, x))
     const phiImg = (m.sunUV[0] - 0.5) * Math.PI * 2;
     const phiW = Math.atan2(this.sunDir.z, this.sunDir.x);

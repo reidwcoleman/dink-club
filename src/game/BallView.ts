@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GFX } from '../render/gfx.ts';
 import { BALL_R } from '../sim/dims.ts';
 import type { V3 } from '../sim/Ball.ts';
 
@@ -33,7 +34,8 @@ export class BallView {
       emissiveIntensity: 0.25,
     });
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R * BallView.VIS, 32, 20), mat);
-    this.mesh.castShadow = true;
+    // (the TV keeps a still shadow map: the ball has its soft contact shadow instead)
+    this.mesh.castShadow = !GFX.lite;
     this.mesh.receiveShadow = true;
     this.mesh.name = 'ball';
     const smat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.75, 0.9, 0.2), transparent: true, opacity: 0.35, depthWrite: false });

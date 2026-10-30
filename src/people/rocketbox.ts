@@ -90,6 +90,24 @@ function plain(src: THREE.BufferGeometry): THREE.BufferGeometry {
 }
 
 const avatarP = new Map<string, Promise<RbAvatar>>();
+const loaded: RbAvatar[] = [];
+
+/**
+ * The avatars' own textures are only ever drawn while the crowd is baked (the players wear the
+ * scanned bodies over hidden Rocketbox rigs): once that's done a TV can let go of them — tens of MB.
+ */
+export function releaseAvatarImages() {
+  const tiny = document.createElement('canvas');
+  tiny.width = tiny.height = 1;
+  for (const av of loaded) {
+    for (const t of [av.map, av.normal, av.mask, av.hairMap]) {
+      if (!t || t.image === tiny) continue;
+      t.dispose();
+      t.image = tiny;
+      t.needsUpdate = true;
+    }
+  }
+}
 
 export function loadAvatar(name: string): Promise<RbAvatar> {
   let p = avatarP.get(name);
@@ -126,6 +144,7 @@ export function loadAvatar(name: string): Promise<RbAvatar> {
         map, normal, mask, hairMap,
       };
       g.scene.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+      loaded.push(av);
       return av;
     })();
     avatarP.set(name, p);

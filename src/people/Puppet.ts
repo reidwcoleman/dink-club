@@ -87,6 +87,7 @@ export class Puppet {
   private sHand: THREE.Bone;
   /** the paddle in this hand's frame: the handle through the closed fist */
   private gripPos = new THREE.Vector3();
+  private planar: THREE.SkinnedMesh | null = null;
   private gripQuat = new THREE.Quaternion();
   private scale = 1;
 
@@ -210,8 +211,23 @@ export class Puppet {
     this.scale = look.height ?? 1;
     this.root.scale.setScalar(this.scale);
     this.hipRatio *= this.scale;
+    // the TV: no live shadow map — the body is flattened onto the court along the sun instead
+    if (GFX.lite) {
+      scene.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = false; });
+      scene.traverse((o) => {
+        const m = o as THREE.SkinnedMesh;
+        if (!m.isSkinnedMesh || this.planar) return;
+        const sh = new THREE.SkinnedMesh(m.geometry, planarShadowMaterial());
+        sh.bind(m.skeleton, m.bindMatrix);
+        sh.frustumCulled = false;
+        sh.renderOrder = 1;
+        m.parent!.add(sh);
+        this.planar = sh;
+      });
+    }
     // 3. the paddle the player sees (the original keeps doing the maths, unseen)
     this.paddle = srcPaddle.clone();
+    if (GFX.lite) this.paddle.traverse((o) => { o.castShadow = false; });
     srcPaddle.visible = false;
     this.paddle.matrixAutoUpdate = false;
     // the Rocketbox body is now only a skeleton
@@ -469,5 +485,31 @@ vec3 hsv2rgb( vec3 c ) {
       }`);
   };
   m.customProgramCacheKey = () => `puppet-${hue}-${sat}-${skin.toArray().join(',')}-${look.shorts ?? ''}`;
+  return m;
+}
+
+/** the direction the sunlight travels (down toward the ground): set by the world's sky */
+export const SUN_RAY = new THREE.Vector3(-0.5, -0.6, 0.6).normalize();
+let planarMat: THREE.MeshBasicMaterial | null = null;
+const uRay = { value: SUN_RAY };
+/**
+ * A body's shadow without a shadow map: the skinned body drawn again with every vertex slid along
+ * the sunlight onto the court. All of it lands on one plane, so with depth writes on the overlapping
+ * parts can't darken twice (the second fragment at the same depth fails the test).
+ */
+function planarShadowMaterial(): THREE.MeshBasicMaterial {
+  if (planarMat) return planarMat;
+  const m = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: true, toneMapped: false });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uRay = uRay;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform vec3 uRay;')
+      .replace('#include <project_vertex>', /* glsl */ `
+        vec4 wp = modelMatrix * vec4( transformed, 1.0 );
+        wp.xyz -= uRay * ( ( wp.y - 0.007 ) / min( uRay.y, -0.05 ) );
+        vec4 mvPosition = viewMatrix * wp;
+        gl_Position = projectionMatrix * mvPosition;`);
+  };
+  m.customProgramCacheKey = () => 'planar-shadow';
+  planarMat = m;
   return m;
 }

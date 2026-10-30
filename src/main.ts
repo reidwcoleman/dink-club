@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseAvatarImages } from './people/rocketbox.ts';
 import { Renderer, type Quality } from './render/Renderer.ts';
 import { World } from './world/World.ts';
 import type { SkyName } from './world/Sky.ts';
@@ -99,6 +100,7 @@ async function boot() {
   await crowd.bake(renderer.gl, (f) => menu.setStatus(`Filling the bleachers… ${Math.round(f * 100)}%`));
   crowd.populate(world.club.seats, 0.62);
   world.scene.add(crowd.mesh);
+  if (GFX.lite) textureDiet();
   game = new Game(world, camera, input, hud, audio, crowd);
   game.onDof = (on, focus, range) => renderer.setDof(on, focus, (range ?? 3) * 1.6, 1.8);
   game.onPadEvent = (slot, kind, data) => {
@@ -124,6 +126,40 @@ function formatOf(f: string): Pick<GameConfig, 'to' | 'games' | 'rally'> {
   return { to: 11, games: 1, rally: false };
 }
 
+/**
+ * A TV has ~2 GB shared between the system and the GPU: the avatars' source images go once the
+ * crowd is baked, and no texture keeps more than 1024 px a side (the screen is drawn smaller than that).
+ */
+function textureDiet() {
+  releaseAvatarImages();
+  const seen = new Set<THREE.Texture>();
+  const shrink = (t: THREE.Texture) => {
+    if (seen.has(t)) return;
+    seen.add(t);
+    const im = t.image as { width?: number; height?: number; close?: () => void } | null;
+    const w = im?.width ?? 0, h = im?.height ?? 0;
+    if (!(im instanceof HTMLImageElement || im instanceof HTMLCanvasElement || (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap)) || Math.max(w, h) <= 1024) return;
+    const k = 1024 / Math.max(w, h);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * k));
+    c.height = Math.max(1, Math.round(h * k));
+    c.getContext('2d')!.drawImage(im as CanvasImageSource, 0, 0, c.width, c.height);
+    (im as { close?: () => void }).close?.();
+    t.dispose();
+    t.image = c;
+    t.needsUpdate = true;
+  };
+  world.scene.traverse((o) => {
+    const mats = (o as THREE.Mesh).material;
+    if (!mats) return;
+    for (const m of ([] as THREE.Material[]).concat(mats)) {
+      for (const v of Object.values(m)) if ((v as THREE.Texture)?.isTexture) shrink(v as THREE.Texture);
+      const u = (m as THREE.ShaderMaterial).uniforms;
+      if (u) for (const k in u) if ((u[k].value as THREE.Texture)?.isTexture) shrink(u[k].value as THREE.Texture);
+    }
+  });
+}
+
 async function play(c: MenuChoice, demo = false) {
   if (!game) return;
   audio.start();
@@ -138,6 +174,7 @@ async function play(c: MenuChoice, demo = false) {
   await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo, move: c.move === 'body' ? 'body' : 'auto' }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
   world.scene.environment = null;
   world.sky.captureEnv(world.dynamic);
+  if (GFX.lite) { textureDiet(); renderer.refreshShadows(); }
   menu.hide();
   hud.show(true);
   inMatch = true;
@@ -161,7 +198,7 @@ menu.onPlay = (c) => void play(c);
 menu.onChange = (key, c) => {
   audio.start();
   audio.music(1);
-  if (key === 'sky') void world.setSky(c.sky as SkyName);
+  if (key === 'sky') void world.setSky(c.sky as SkyName).then(() => renderer.refreshShadows());
   if (key === 'move') lobby.broadcast({ t: 'mode', move: c.move === 'body' ? 'body' : 'auto' });
 };
 // browsers keep audio off until someone clicks or presses a key on the TV's page

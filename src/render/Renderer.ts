@@ -178,7 +178,9 @@ export class Renderer {
    * mapping and exposure; a fixed, lower render scale
    */
   lite = false;
-  private liteFrame = 0;
+  private shadowFrames = 30;
+  /** the scenery changed (a match set up, the light moved): redraw the kept shadow map */
+  refreshShadows() { this.shadowFrames = 6; }
   /** the scene drawn in lite mode (the post chain keeps its own reference) */
   liveScene: THREE.Scene | null = null;
   setLite(on: boolean) {
@@ -194,7 +196,8 @@ export class Renderer {
   render(dt: number) {
     this.gl.info.reset();
     if (this.lite) {
-      if ((this.liteFrame++ & 1) === 0) this.gl.shadowMap.needsUpdate = true;
+      // the TV's shadow map holds only the still scenery: drawn for a few frames after a change, then kept
+      if (this.shadowFrames > 0) { this.gl.shadowMap.needsUpdate = true; this.shadowFrames--; }
       this.gl.toneMappingExposure = this.exposure.value;
       this.gl.render(this.liveScene ?? this.scene, this.camera);
       return;
