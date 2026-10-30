@@ -3,7 +3,8 @@ import { BALL_R, BALL_M, netTop, POST_X, SURFACE_PHYS, type Surface } from './di
 /**
  * Pickleball flight, independent of the renderer (tools/simtest.ts runs it in node):
  *  - gravity, quadratic drag (Cd 0.45: the holes make a light plastic ball slow down fast)
- *  - Magnus lift from spin, C_L = 1 / (2 + v / (r·ω)) (Watts & Ferrer), weakened for a holed shell
+ *  - Magnus lift from spin, C_L = 1 / (2 + v / (r·ω)) (Watts & Ferrer), a fifth weaker for a holed
+ *    shell (slow-motion sidespin drives bend ~0.5 m)
  *  - spin decay (τ ≈ 3 s)
  *  - bounce: vertical restitution per surface; tangential friction impulse that either slides
  *    the whole contact (μ(1+e)|vy|) or grips and rolls out (thin shell, I = ⅔mr²)
@@ -20,7 +21,7 @@ const RHO = 1.21;
 const A = Math.PI * BALL_R * BALL_R;
 export const CD = 0.45;
 export const KD = (0.5 * RHO * CD * A) / BALL_M; // drag: a = −KD |v| v
-export const KL = (0.5 * RHO * A * 0.55) / BALL_M; // lift: a = KL · C_L · |v|² (ŵ×v̂)
+export const KL = (0.5 * RHO * A * 0.8) / BALL_M; // lift: a = KL · C_L · |v|² (ŵ×v̂)
 const G = 9.81;
 export const SPIN_TAU = 3;
 /** the net's tape: radius of its padded top, and its restitution */

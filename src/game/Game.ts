@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BallSim, predict, type BallEvent, v3 } from '../sim/Ball.ts';
-import { solveShot, type ShotSpec } from '../sim/Shot.ts';
+import { solveShot, flyToGround, type ShotSpec } from '../sim/Shot.ts';
 import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
 import { FENCE } from '../world/Club.ts';
@@ -872,8 +872,21 @@ export class Game {
       const out = this.paddleStrike(p, plan, sol.v, quality, shot.rpm ?? 0);
       sol.v = out.v;
       sol.w = out.w;
+      // spin about the vertical: it curves in the air and kicks sideways off the bounce. A player
+      // learns to start a curving ball outside its line: about half the bend is aimed for
+      const sideRpm = Math.abs(out.w.y) * 9.55;
+      if (sideRpm > 300) {
+        const c0 = { x: contact.x, y: contact.y, z: contact.z };
+        const bent = flyToGround(c0, sol.v, sol.w), straight = flyToGround(c0, sol.v, { ...sol.w, y: 0 });
+        const dx = straight.x - c0.x, dz = straight.z - c0.z, d = Math.hypot(dx, dz) || 1;
+        // turning the launch by a moves the landing a·d along (−dz, dx)/d: undo half the bend
+        const a = -0.5 * ((bent.x - straight.x) * -dz + (bent.z - straight.z) * dx) / (d * d);
+        const ca = Math.cos(a), sa = Math.sin(a);
+        sol.v = { x: sol.v.x * ca - sol.v.z * sa, y: sol.v.y, z: sol.v.x * sa + sol.v.z * ca };
+      }
+      if (sideRpm > 600 && p.shot && sideRpm > Math.abs(p.shot.rpm ?? 0) * 0.8) p.shot.label = sideRpm > 1300 ? 'Heavy sidespin' : 'Sidespin';
     }
-    this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
+    this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${p.human && Math.abs(sol.w.y) * 9.55 > 300 ? ` side=${Math.round(sol.w.y * 9.55)}` : ''}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
     this.launch(p, { x: contact.x, y: contact.y, z: contact.z }, sol.v, sol.w, type, power, quality);
     p.shot = null;
   }
@@ -905,16 +918,37 @@ export class Game {
     n = rotate(n, up, twist);
     // the path: brushing up for topspin, under for slice (a lift of 1 ≈ 35° across the face);
     // players swing a little harder along a brushed path to keep the pace
-    const brush = THREE.MathUtils.clamp(rpm / 2600, -0.9, 1) * 0.6;
-    const path = rotate(n, across, brush);
-    const speed = flat.speed / Math.max(0.7, Math.cos(brush) * 0.6 + 0.4) * (1 + gauss() * 0.03 * (1.4 - quality));
+    let brush = THREE.MathUtils.clamp(rpm / 2600, -0.9, 1) * 0.6;
+    // the phone's own path across its face, when it measured one (room frame → this player's):
+    // up or down the face is topspin or slice, sideways across it is sidespin — the curve
+    let side = 0;
+    const mv = cm?.swing.vel, mn = cm?.swing.n;
+    if (mv && mn) {
+      const court = (a: number[]) => ({ x: p.right.x * a[0] + p.fwd.x * a[2], y: a[1], z: p.right.z * a[0] + p.fwd.z * a[2] });
+      const vm = court(mv), nm = norm(court(mn));
+      const sideM = norm({ x: -nm.z, y: 0, z: nm.x }); // up × n: horizontal across the face
+      const upM = { x: nm.y * sideM.z - nm.z * sideM.y, y: nm.z * sideM.x - nm.x * sideM.z, z: nm.x * sideM.y - nm.y * sideM.x };
+      const along = Math.max(len(vm) * 0.35, vm.x * nm.x + vm.y * nm.y + vm.z * nm.z, 0.3);
+      const tv = (vm.x * upM.x + vm.y * upM.y + vm.z * upM.z) / along;
+      const th = (vm.x * sideM.x + vm.z * sideM.z) / along;
+      brush = brush * 0.5 + THREE.MathUtils.clamp(Math.atan(tv), -0.9, 0.9) * 0.5;
+      // a square swing reads a little sideways from sensor noise: that much is nothing
+      side = THREE.MathUtils.clamp(Math.sign(th) * Math.max(0, Math.abs(th) - 0.1) * 1.8, -1, 1);
+    }
+    let path = rotate(n, across, brush);
+    if (side) {
+      const sideF = norm({ x: -n.z, y: 0, z: n.x });
+      path = norm({ x: path.x + sideF.x * side, y: path.y, z: path.z + sideF.z * side });
+    }
+    const speed = flat.speed / Math.max(0.6, Math.cos(brush) * Math.cos(Math.atan(side)) * 0.6 + 0.4) * (1 + gauss() * 0.03 * (1.4 - quality));
     // the body's run carries into the stroke
     const u = { x: path.x * speed + p.vel.x * 0.7, y: path.y * speed, z: path.z * speed + p.vel.z * 0.7 };
     const hit = impact(vIn, wIn, u, n);
     const dull = 1 - Math.min(0.35, (off / 0.06) ** 2 * 0.3);
     hit.v.x *= dull; hit.v.y *= dull; hit.v.z *= dull;
     // what practice gives back: part of the way toward the intended launch
-    const assist = this.cfg.move === 'body' ? 0.45 : 0.6;
+    // (less with a measured path: the curve is the player's)
+    const assist = (this.cfg.move === 'body' ? 0.45 : 0.6) * (mv ? 0.75 : 1);
     const v = hit.v, sp = len(v);
     const dir = norm({ x: v.x + (want.x / len(want) * sp - v.x) * assist, y: v.y + (want.y / len(want) * sp - v.y) * assist, z: v.z + (want.z / len(want) * sp - v.z) * assist });
     return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w: hit.w };

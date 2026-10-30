@@ -43,7 +43,7 @@ struct PaddleView: View {
                 if link.tracking {
                     Text("You move: walk and step to reach the ball")
                         .font(.system(size: 14)).foregroundStyle(.white.opacity(0.5)).padding(.top, 4)
-                    Button("Face the TV and tap to recenter") { link.tracker.recenter() }
+                    Button("Face the TV and tap to recenter") { link.tracker.recenter(); link.motion.recenter() }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color(red: 0.75, green: 0.95, blue: 0.2))
                         .padding(.top, 10)
@@ -87,24 +87,21 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
         motion.onSwing = { [weak self] s0 in
             guard let self else { return }
             var s = s0
-            var extra = ""
-            // the camera tracking's view of the same swing: the real path and the face's direction
-            if let pd = self.tracker.paddle(at: s.t) {
-                let v = pd.vel, sp = simd_length(v)
-                if sp > 0.6 {
-                    // the path's climb or fall is the brush (spin, lobs) — no drifting integral
-                    s = s.with(lift: max(-1, min(1, v.y / sp * 1.8)),
-                               power: min(1, s.power * 0.75 + max(0, min(1, (sp - 0.8) / 5)) * 0.25))
-                }
-                // the hitting face points at the TV (the back of the phone on a backhand)
-                let n = pd.n.z < 0 ? -pd.n : pd.n
-                if abs(n.z) > 0.2 { s = s.with(aim: max(-1.6, min(1.6, atan2(n.x, n.z) / (40 * .pi / 180)))) }
-                extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
+            // the camera tracking's view of the same swing steadies the hand's part of the path
+            // (the integrated acceleration drifts a little; ARKit's position slope doesn't)
+            if let pd = self.tracker.paddle(at: s.t), let v0 = s.vel, simd_length(pd.vel) > 0.4 {
+                let v = v0 * 0.5 + (pd.vel + (v0 - s.hand)) * 0.5, sp = simd_length(v)
+                s = s.with(lift: max(-1, min(1, v.y / max(0.5, sp) * 1.8)),
+                           power: min(1, s.power * 0.8 + max(0, min(1, (sp - 1) / 8)) * 0.2))
+                s.vel = v
             }
             if let lan = self.lanLink {
-                let pd = self.tracker.paddle(at: s.t)
-                lan.sendSwing(s, vel: pd?.vel, n: pd.map { $0.n.z < 0 ? -$0.n : $0.n })
+                lan.sendSwing(s, vel: s.vel, n: s.n)
             } else {
+                var extra = ""
+                if let v = s.vel, let n = s.n {
+                    extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
+                }
                 let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
                                 s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
                 self.web?.evaluateJavaScript(js)
@@ -200,7 +197,7 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
         case "start":
             startSensing()
         case "recenter":
-            motion.recenter()
+            motion.recenter(); tracker.recenter()
         case "track":
             let on = (m["on"] as? Bool) ?? false
             tracking = on && RoomTracker.supported
@@ -260,6 +257,11 @@ struct Swing {
     let peak: Double
     /// CMLogItem timestamp of the peak (seconds since boot)
     let t: TimeInterval
+    /// the paddle head's velocity at the peak (m/s) and the hitting face's normal, room frame (x right, y up, z toward the TV)
+    var vel: SIMD3<Double>? = nil
+    var n: SIMD3<Double>? = nil
+    /// the hand's own part of `vel` (without the head's turn about it)
+    var hand = SIMD3<Double>(0, 0, 0)
     func ago() -> Double { max(0, ProcessInfo.processInfo.systemUptime - t) }
     func with(lift: Double? = nil, power: Double? = nil, aim: Double? = nil) -> Swing {
         var s = self
@@ -271,14 +273,19 @@ struct Swing {
 }
 
 /**
- Swing detection on CoreMotion's fused device motion at 100 Hz (the web page gets ~60 Hz):
- - a swing starts when the rotation rate passes 230°/s and ends just after its peak; the peak
-   time is refined with a parabola through the neighbouring samples
- - power from the peak rotation rate, lift from the paddle's vertical speed (the integral of the
-   user acceleration along "up", leaking between swings)
- - face: how far the screen tilts to the sky (−gravity·z)
- - aim: how far the phone has turned about the vertical since it was last held still (the gyro's
-   component along "up", integrated; positive is a turn to the left, so aim is its negative)
+ The phone as a paddle, from CoreMotion's fused motion at 100 Hz, in the room's frame (x right,
+ y up, z toward the TV — "toward the TV" is where the back camera pointed when the paddle started:
+ you were looking at the screen, facing the TV):
+
+ - a swing starts when the turning rate passes 230°/s and ends just after its peak; the peak time
+   is refined with a parabola through the neighbouring samples
+ - the paddle's velocity at the peak: the hand's (the user acceleration integrated through the
+   swing, leaking away between swings) plus the paddle head's turn about the hand (ω × r, the head
+   ~16 cm beyond the phone's centre along its long edge). Its direction is the swing path — up
+   or down across the face is topspin or slice, across it sideways is sidespin (curves)
+ - the face: the screen's normal in the room (the back of the phone on a backhand), so its tilt
+   (open / closed) and where it points (aim) are absolute, not a drifting integral
+ - power from the peak turning rate, blended with the paddle speed
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
@@ -286,14 +293,18 @@ final class SwingDetector {
     private let queue = OperationQueue()
     private var swinging = false
     private var cool: TimeInterval = 0
-    private var samples: [(t: TimeInterval, g: Double, up: Double, face: Double, yaw: Double)] = []
-    private var vUp = 0.0
-    private var yaw = 0.0
-    private var calmSince: TimeInterval = 0
+    private struct S { let t: TimeInterval; let g: Double; let v: SIMD3<Double>; let h: SIMD3<Double>; let n: SIMD3<Double> }
+    private var samples: [S] = []
+    private var vHand = SIMD3<Double>(0, 0, 0)
     private var last: TimeInterval = 0
     private let start0 = 230.0
     /// the last moment the phone was turning fast (a swing, its backswing or follow-through)
     private(set) var lastFast: TimeInterval = 0
+    /// which way CMAttitude's matrix maps (reference → device, or its transpose), found from gravity
+    private var refToDevice: Bool?
+    /// "toward the TV" in CoreMotion's reference frame (horizontal)
+    private var fwdRef: SIMD3<Double>?
+    private var wantCenter = true
 
     func start() {
         guard mm.isDeviceMotionAvailable, !mm.isDeviceMotionActive else { return }
@@ -308,31 +319,48 @@ final class SwingDetector {
 
     func stop() { mm.stopDeviceMotionUpdates() }
 
-    func recenter() { queue.addOperation { self.yaw = 0 } }
+    /// the phone now faces the TV (screen toward you): that's "toward the TV" from here on
+    func recenter() { queue.addOperation { self.wantCenter = true } }
 
     private func step(_ m: CMDeviceMotion) {
         let t = m.timestamp
         let dt = last > 0 ? min(0.05, t - last) : 0.01
         last = t
-        let r = m.rotationRate
-        let g = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot() * 180 / .pi
+        let R = m.attitude.rotationMatrix
+        let M = simd_double3x3(rows: [SIMD3(R.m11, R.m12, R.m13), SIMD3(R.m21, R.m22, R.m23), SIMD3(R.m31, R.m32, R.m33)])
+        let grav = simd_normalize(SIMD3(m.gravity.x, m.gravity.y, m.gravity.z))
+        if refToDevice == nil {
+            // the reference frame's down, carried both ways: the one that lands on measured gravity
+            let a = M * SIMD3(0, 0, -1), b = M.transpose * SIMD3(0, 0, -1)
+            refToDevice = simd_dot(a, grav) >= simd_dot(b, grav)
+        }
+        let toDev = { (v: SIMD3<Double>) -> SIMD3<Double> in self.refToDevice! ? M * v : M.transpose * v }
+        let toRef = { (v: SIMD3<Double>) -> SIMD3<Double> in self.refToDevice! ? M.transpose * v : M * v }
+        if wantCenter || fwdRef == nil {
+            wantCenter = false
+            // the back camera's heading (−z of the device); held flat, the top edge's
+            var f = toRef(SIMD3(0, 0, -1)); f.z = 0
+            if simd_length(f) < 0.25 { f = toRef(SIMD3(0, 1, 0)); f.z = 0 }
+            fwdRef = simd_normalize(f)
+        }
+        // the room's axes as seen from the device
+        let up = -grav
+        let fwd = toDev(fwdRef!)
+        let right = simd_cross(fwd, up)
+        let room = { (v: SIMD3<Double>) -> SIMD3<Double> in SIMD3(simd_dot(v, right), simd_dot(v, up), simd_dot(v, fwd)) }
+        let w = SIMD3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z)
+        let g = simd_length(w) * 180 / .pi
         if g > 140 { lastFast = t }
-        let up = (x: -m.gravity.x, y: -m.gravity.y, z: -m.gravity.z)
-        let aUp = (m.userAcceleration.x * up.x + m.userAcceleration.y * up.y + m.userAcceleration.z * up.z) * 9.81
-        vUp = vUp * exp(-dt / (swinging ? 0.6 : 0.15)) + aUp * dt
-        // turning about the vertical (right-handed: + = to the left seen from above)
-        yaw += (r.x * up.x + r.y * up.y + r.z * up.z) * dt
-        if g < 45 {
-            if calmSince == 0 { calmSince = t }
-            // held still: that's facing the TV — let the reference settle there
-            if t - calmSince > 0.5 { yaw *= exp(-dt / 0.8) }
-        } else { calmSince = 0 }
-        let face = up.z
+        // the hand: user acceleration integrated, leaking away between swings (it only has to hold a swing)
+        let a = room(SIMD3(m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z) * 9.81)
+        vHand = vHand * exp(-dt / (swinging ? 0.6 : 0.15)) + a * dt
         if !swinging {
             samples.removeAll(keepingCapacity: true)
             if g > start0 && t > cool { swinging = true } else { return }
         }
-        samples.append((t, g, vUp, face, yaw))
+        // the paddle head turning about the hand
+        let tip = room(simd_cross(w, SIMD3(0, 0.16, 0)))
+        samples.append(S(t: t, g: g, v: vHand + tip, h: vHand, n: room(SIMD3(0, 0, 1))))
         let n = samples.count
         var k = 0
         for i in 1..<n where samples[i].g > samples[k].g { k = i }
@@ -350,12 +378,16 @@ final class SwingDetector {
             }
         }
         let pk = samples[k]
-        let s = Swing(power: max(0, min(1, (gPeak - start0) / 1350)),
-                      lift: max(-1, min(1, pk.up / 2.4)),
-                      face: pk.face,
-                      aim: max(-1.6, min(1.6, -pk.yaw / (40 * .pi / 180))),
-                      peak: gPeak, t: tPeak)
-        vUp = 0
+        let v = pk.v, sp = simd_length(v)
+        // the hitting face points at the TV (the back of the phone on a backhand)
+        let nf = pk.n.z < 0 ? -pk.n : pk.n
+        let gyroPower = max(0, min(1, (gPeak - start0) / 1350))
+        let s = Swing(power: min(1, gyroPower * 0.65 + max(0, min(1, (sp - 1) / 8)) * 0.35),
+                      lift: sp > 0.5 ? max(-1, min(1, v.y / sp * 1.8)) : 0,
+                      face: pk.n.y,
+                      aim: abs(nf.z) > 0.2 ? max(-1.6, min(1.6, atan2(nf.x, nf.z) / (40 * .pi / 180))) : nil,
+                      peak: gPeak, t: tPeak, vel: v, n: nf, hand: pk.h)
+        vHand = .zero
         DispatchQueue.main.async { self.onSwing?(s) }
     }
 }

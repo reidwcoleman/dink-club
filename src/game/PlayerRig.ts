@@ -43,17 +43,20 @@ export const CONTACT = 0.55;
 const STROKES: Record<StrokeKind, Key[]> = {
   fh: [
     { t: 0, head: [0.12, 1.08, 0.58], shaft: [-0.1, 0.45, 0.88], face: [-1, 0, 0], chest: 5, hips: 0, lean: 12, knee: 0.45, off: 'throat' },
-    { t: 0.2, head: [0.62, 1.42, 0.05], shaft: [0.35, 0.8, -0.3], face: [-0.2, 0.2, -1], chest: 60, hips: 30, lean: 10, knee: 0.5, off: [0.25, 1.3, 0.55] },
-    { t: 0.36, head: [0.62, 1.32, -0.55], shaft: [0.18, 0.62, -0.76], face: [0.1, -0.9, 0.3], chest: 88, hips: 45, lean: 12, knee: 0.6, off: [0.55, 1.25, 0.55], pole: [0.35, -1, -0.7] },
-    { t: 0.47, head: [0.86, 0.64, -0.3], shaft: [0.3, -0.45, -0.84], face: [0.1, -0.3, 1], chest: 55, hips: 25, lean: 14, knee: 0.55, off: [0.35, 1.15, 0.35], pole: [0.3, -1, -0.2] },
+    // (slow-motion forehand drives: a unit turn with a short take-back to hip height behind the
+    // hip, head dropped and wrist laid back; the hand leads and the head lags, then whips up
+    // through the ball beside the front hip; the finish wraps over the opposite shoulder)
+    { t: 0.2, head: [0.6, 1.18, 0.02], shaft: [0.4, 0.5, -0.5], face: [0.55, 0.0, -0.8], chest: 55, hips: 30, lean: 12, knee: 0.55, off: [0.25, 1.25, 0.55] },
+    { t: 0.36, head: [0.66, 0.9, -0.48], shaft: [0.28, -0.15, -0.95], face: [0.85, -0.3, 0.2], chest: 85, hips: 42, lean: 14, knee: 0.62, off: [0.5, 1.22, 0.55], pole: [0.35, -1, -0.6] },
+    { t: 0.47, head: [0.84, 0.66, -0.24], shaft: [0.42, -0.38, -0.82], face: [0.55, -0.25, 0.8], chest: 45, hips: 15, lean: 16, knee: 0.58, off: [0.3, 1.15, 0.35], pole: [0.25, -1, -0.15] },
     { t: CONTACT, head: [0.78, 0.95, 0.45], shaft: [0.95, -0.12, 0.22], face: [0, -0.08, 1], chest: -4, hips: -14, lean: 16, knee: 0.45, off: [-0.1, 1.1, 0.2], pole: [0.2, -1, 0] },
     { t: 0.7, head: [-0.08, 1.42, 0.62], shaft: [-0.45, 0.8, 0.4], face: [-0.6, 0.2, 0.75], chest: -30, hips: -18, lean: 12, knee: 0.35, off: [-0.35, 1.05, 0.05], pole: [0.6, -0.6, 0] },
     { t: 1, head: [-0.42, 1.48, -0.3], shaft: [-0.3, -0.12, -0.94], face: [-0.8, 0.3, 0.4], chest: -58, hips: -32, lean: 8, knee: 0.3, off: [-0.25, 1.2, 0.1], pole: [0.8, -0.3, 0.2] },
   ],
   bh: [
     { t: 0, head: [0.1, 1.08, 0.58], shaft: [-0.1, 0.45, 0.88], face: [-1, 0, 0], chest: 5, hips: 0, lean: 12, knee: 0.45, off: 'throat' },
-    { t: 0.2, head: [-0.55, 1.4, 0.0], shaft: [-0.35, 0.8, -0.35], face: [0.2, 0.2, -1], chest: -60, hips: -30, lean: 10, knee: 0.5, off: 'grip' },
-    { t: 0.36, head: [-0.66, 1.3, -0.55], shaft: [-0.2, 0.6, -0.77], face: [-0.1, -0.9, 0.3], chest: -90, hips: -48, lean: 12, knee: 0.6, off: 'grip', pole: [-0.3, -1, -0.6] },
+    { t: 0.2, head: [-0.55, 1.22, 0.0], shaft: [-0.4, 0.5, -0.5], face: [-0.55, 0.0, -0.8], chest: -60, hips: -30, lean: 12, knee: 0.55, off: 'grip' },
+    { t: 0.36, head: [-0.62, 0.95, -0.5], shaft: [-0.26, -0.1, -0.95], face: [-0.85, -0.3, 0.2], chest: -90, hips: -46, lean: 14, knee: 0.62, off: 'grip', pole: [-0.3, -1, -0.6] },
     { t: 0.47, head: [-0.88, 0.62, -0.28], shaft: [-0.3, -0.45, -0.84], face: [-0.1, -0.3, 1], chest: -55, hips: -25, lean: 14, knee: 0.55, off: 'grip', pole: [-0.2, -1, -0.2] },
     { t: CONTACT, head: [-0.72, 0.95, 0.45], shaft: [-0.95, -0.1, 0.25], face: [0, -0.08, 1], chest: 4, hips: 12, lean: 16, knee: 0.45, off: 'grip', pole: [-0.2, -1, 0.2] },
     { t: 0.7, head: [-0.1, 1.6, 0.45], shaft: [0.35, 0.9, 0.25], face: [0.6, 0.2, 0.75], chest: 30, hips: 18, lean: 10, knee: 0.35, off: 'grip', pole: [-0.5, -0.8, 0] },
@@ -526,17 +529,25 @@ export class PlayerRig {
       }
     }
     if (stance < 0.02) return;
+    // the back foot through a groundstroke: as the hips turn through the ball the weight goes onto
+    // the front foot and the back heel comes up, the toes pivoting on the court
+    const ground = this.stroke && !this.stroke.includes('Volley') && !this.stroke.includes('Dink') && this.stroke !== 'serve' && this.stroke !== 'smash';
+    const heelW = ground ? smooth(Math.min(1, Math.max(0, (this.strokeT - 0.5) / 0.16))) * (1 - smooth(Math.min(1, Math.max(0, (this.strokeT - 0.86) / 0.14)))) : 0;
+    const ballSide = Math.sign(this.contactLocal.x) || 1;
     // IK each leg to its plant (+ swing height while stepping)
     for (const f of this.feet) {
       const target = f.plant.clone();
       const liftH = f.t < 1 ? Math.sin(f.t * Math.PI) * 0.09 : 0;
-      target.y = this.ankleY + liftH;
+      const heel = f.side === ballSide ? heelW : 0;
+      target.y = this.ankleY + liftH + heel * 0.075;
+      if (heel > 0) target.addScaledVector(fwd, heel * 0.04);
       const thighQ = f.thigh.quaternion.clone(), calfQ = f.calf.quaternion.clone(), footQ = f.bone.quaternion.clone();
       const pole = fwd.clone().multiplyScalar(1).addScaledVector(right, f.side * 0.25).add(new THREE.Vector3(0, 0.1, 0));
       solveTwoBone(f.thigh, f.calf, f.bone, target, f.thigh.getWorldPosition(new THREE.Vector3()).add(pole));
       // foot flat, toes out a little
       const rel = (f as Foot & { rel: THREE.Quaternion }).rel;
-      const rq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rootYaw + f.side * -0.18);
+      const rq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rootYaw + f.side * -0.18 - heel * f.side * 0.35);
+      if (heel > 0) rq.premultiply(new THREE.Quaternion().setFromAxisAngle(right, -heel * 0.6));
       setWorldQuat(f.bone, rq.multiply(rel));
       f.bone.updateMatrixWorld(true);
       // blend with the clip by stance
