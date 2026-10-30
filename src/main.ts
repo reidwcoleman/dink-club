@@ -258,8 +258,11 @@ W.__autoHuman = (power = 0.5, lift = 0, jitter = 0.05) => {
   };
   const orig = W.__pump as (n: number, dt?: number) => void;
   W.__pump = (n: number, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(); orig(1, dt); } };
+  W.__sim = (n: number, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(); game?.update(dt); } };
   setInterval(tick, 16);
 };
+// the game alone, no rendering (balance tests)
+W.__sim ??= (n: number, dt = 1 / 60) => { for (let i = 0; i < n; i++) game?.update(dt); };
 W.__play = (demo = true) => play(choice, demo);
 W.__pose = (kind: StrokeKind | null, phase: number, cx = 0.6, cy = 0.6, cz = 6.4) => {
   const r = game?.players?.[0]?.rig;

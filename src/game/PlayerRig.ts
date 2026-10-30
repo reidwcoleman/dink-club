@@ -284,6 +284,15 @@ export class PlayerRig {
     this.sprintAction = clip;
   }
 
+  /** stretch for a ball: the near foot steps out toward `at` and the hips drop, until `seconds` pass */
+  lunge(at: THREE.Vector3, seconds: number) {
+    this.lungeAt.set(at.x, 0, at.z);
+    this.lungeUntil = this.clock + seconds;
+  }
+  private lungeAt = new THREE.Vector3();
+  private lungeUntil = -1;
+  private lungeW = 0;
+
   splitStep() {
     if (this.hop <= 0.001) this.hopV = 1.6;
   }
@@ -394,7 +403,8 @@ export class PlayerRig {
     h.inner.position.set(0, 0, 0);
     root.updateMatrixWorld(true);
     // stance height: knees bent lower the hips
-    const drop = stance * (0.05 + knee * 0.12);
+    this.lungeW += ((this.clock < this.lungeUntil ? 1 : 0) - this.lungeW) * Math.min(1, dt * (this.clock < this.lungeUntil ? 9 : 4));
+    const drop = stance * (0.05 + knee * 0.12 + this.lungeW * 0.16);
     // ---------------- spine: hips yaw on the spine base, chest on the upper spine, lean forward
     const b = this.bones;
     const up = _u.set(0, 1, 0);
@@ -458,6 +468,12 @@ export class PlayerRig {
       // the foot's home under the hip, offset to its side (right = +1)
       const home = this.pos.clone().addScaledVector(right, f.side * width).addScaledVector(fwd, f.side * 0.03).add(lead);
       home.y = 0;
+      if (this.lungeW > 0.05) {
+        // the foot on the ball's side reaches out toward it
+        const to = _w.copy(this.lungeAt).sub(this.pos).setY(0);
+        const d = to.length();
+        if (d > 0.05 && Math.sign(to.dot(right)) === f.side) home.addScaledVector(to, (Math.min(0.62, d) / d) * this.lungeW);
+      }
       if (stance < 0.2 || f.plant.lengthSq() === 0) {
         f.plant.copy(home);
         f.t = 1;

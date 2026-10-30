@@ -32,7 +32,12 @@ export interface Plan {
   /** how late the player will be getting there (s, ≤ 0 is on time) */
   late: number;
   swung: boolean;
+  /** reached with a lunge: the player stops short and stretches the last half metre (weaker, less accurate) */
+  lunge: boolean;
 }
+
+/** how far a lunge stretches the reach (m) */
+export const LUNGE = 0.5;
 
 /** one player: position, movement, the plan for the incoming ball, the swing */
 export class Player {
@@ -112,24 +117,51 @@ export class Player {
         body.x = THREE.MathUtils.clamp(body.x, -FLOOR_HX + 0.4, FLOOR_HX - 0.4);
         body.z = THREE.MathUtils.clamp(body.z, -FLOOR_HZ + 0.5, FLOOR_HZ - 0.5);
         const dist = body.distanceTo(this.pos);
-        const tNeed = react + dist / vmax + Math.min(0.3, (vmax / this.skill.accel) * 0.5) * Math.min(1, dist / 2);
-        const late = tNeed - p.t;
+        const tNeed = (d: number) => react + this.runTime(body.clone().sub(this.pos), d);
+        let late = tNeed(dist) - p.t;
+        // can't get there: stop short and lunge for it
+        let lunge = false;
+        if (late > 0 && !smash && dist > LUNGE) {
+          const lateL = tNeed(dist - LUNGE) - p.t;
+          if (lateL < late) {
+            lunge = true;
+            late = lateL;
+            body.addScaledVector(body.clone().sub(this.pos).setY(0).normalize(), -LUNGE);
+          }
+        }
         const hPen = smash ? 0.3 : Math.abs(p.y - (bounced ? 0.75 : 0.95)) * 1.4;
-        const score = Math.max(0, late) * 12 + hPen + dist * 0.1 + (fh ? 0 : 0.15) + (volley && !smash ? 0.1 : 0) + p.t * 0.05;
+        const score = Math.max(0, late) * 12 + hPen + dist * 0.1 + (fh ? 0 : 0.15) + (volley && !smash ? 0.1 : 0) + p.t * 0.05 + (lunge ? 0.5 : 0);
         if (score < bestScore) {
           bestScore = score;
           const kind: StrokeKind = smash ? 'smash' : volley ? (fh ? 'fhVolley' : 'bhVolley') : fh ? 'fh' : 'bh';
-          best = { tContact: now + p.t, ball, body, kind, forehand: fh, volley, smash, bounced, late, swung: false };
+          best = { tContact: now + p.t, ball, body, kind, forehand: fh, volley, smash, bounced, late, swung: false, lunge };
         }
       }
     }
     return best;
   }
 
-  /** move toward a velocity (m/s) with the player's acceleration limits */
+  /** the top speed in a direction: going back is a backpedal or a turn-and-run, slower than moving up or across */
+  topSpeed(dir: THREE.Vector3): number {
+    const l = Math.hypot(dir.x, dir.z);
+    const back = l > 1e-6 ? Math.max(0, (dir.z * this.side) / l) : 0;
+    return this.skill.speed * (0.85 + 0.15 * this.stamina) * (1 - 0.24 * back);
+  }
+
+  /** time to cover d metres in a direction from a standstill (accelerating, then at top speed) */
+  runTime(dir: THREE.Vector3, d: number): number {
+    const v = this.topSpeed(dir);
+    const a = this.skill.accel;
+    const dAcc = (v * v) / (2 * a);
+    return d < dAcc ? Math.sqrt((2 * d) / a) : v / a + (d - dAcc) / v;
+  }
+
+  /** move toward a velocity (m/s) with the player's acceleration limits; running drains stamina */
   drive(dt: number, want: THREE.Vector3) {
-    const vmax = this.skill.speed * (0.8 + 0.2 * this.stamina);
+    const vmax = this.topSpeed(want);
     if (want.length() > vmax) want.setLength(vmax);
+    const sp = this.vel.length() / this.skill.speed;
+    this.stamina = Math.max(0, Math.min(1, this.stamina - dt * (sp > 0.6 ? 0.02 * sp * sp : -0.004)));
     const dv = want.clone().sub(this.vel);
     const braking = want.lengthSq() < this.vel.lengthSq();
     const a = (braking ? this.skill.accel * 1.25 : this.skill.accel) * dt;

@@ -112,6 +112,9 @@ export class BallView {
     this.squash = 1;
   }
 
+  /** a shot off a hot paddle: a long orange trail */
+  hot = false;
+
   update(p: V3, w: V3, v: V3, dt: number, cameraPos: THREE.Vector3) {
     if (this.flashT < 1) {
       this.flashT += dt / 0.22;
@@ -147,13 +150,14 @@ export class BallView {
     const spinK = Math.min(1, Math.max(0, Math.abs(rpm) - 300) / 1600);
     const sm = this.streak.material as THREE.MeshBasicMaterial;
     sm.color.setRGB(0.75, 0.9, 0.2).lerp(rpm > 0 ? SPIN_TOP : SPIN_BACK, spinK);
-    if ((speed > 12 || (speed > 6 && spinK > 0.2)) && dist > 3) {
-      const len = Math.min(1.1, speed * (1 / 60) * (0.55 + spinK * 0.9));
+    if (this.hot) sm.color.setRGB(1, 0.42, 0.08);
+    if ((speed > 12 || (speed > 6 && spinK > 0.2) || (this.hot && speed > 4)) && dist > 3) {
+      const len = Math.min(this.hot ? 1.6 : 1.1, speed * (1 / 60) * (0.55 + spinK * 0.9 + (this.hot ? 1.2 : 0)));
       this.streak.visible = true;
       this.streak.position.set(p.x - (v.x / speed) * len * 0.5, p.y - (v.y / speed) * len * 0.5, p.z - (v.z / speed) * len * 0.5);
       this.streak.scale.set(1, 1, len);
       this.streak.lookAt(p.x, p.y, p.z);
-      sm.opacity = Math.max(Math.min(0.35, (speed - 12) / 60), spinK * 0.5);
+      sm.opacity = this.hot ? 0.6 : Math.max(Math.min(0.35, (speed - 12) / 60), spinK * 0.5);
     } else this.streak.visible = false;
     this.prev.set(p.x, p.y, p.z);
   }

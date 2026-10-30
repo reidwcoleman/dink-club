@@ -87,6 +87,10 @@ export class Game {
   /** this player already missed the ball in flight (no more plans until the next strike) */
   private missed = [false, false];
   private lastSqueak = [0, 0];
+  /** consecutive perfectly timed hits per player; three in a row and the paddle is hot */
+  private perfects = [0, 0];
+  private hot = [false, false];
+  private prevBall = new THREE.Vector3();
   private hitStop = 0;
   replay!: Replay;
   private highlight = false;
@@ -175,6 +179,8 @@ export class Game {
     for (const p of this.players) {
       p.rig.walking = false;
       p.place(spots[p.index].x, spots[p.index].z);
+      // the walk back and the towel: some of the legs come back between points
+      p.stamina = Math.min(1, p.stamina + 0.1);
     }
     for (const p of this.players) {
       p.plan = null;
@@ -246,7 +252,9 @@ export class Game {
       if (p.z < fzF) { p.z = fzF; v.z *= -0.15; v.x *= 0.4; this.onBallDead(); }
       if (p.z > fzN) { p.z = fzN; v.z *= -0.15; v.x *= 0.4; this.onBallDead(); }
       if (this.ball.p.y <= BALL_R + 0.001 && Math.hypot(this.ball.v.x, this.ball.v.z) < 0.25 && Math.abs(this.ball.v.y) < 0.1) this.onBallDead();
+      this.bodyCheck();
     }
+    this.prevBall.set(this.ball.p.x, this.ball.p.y, this.ball.p.z);
     const look = new THREE.Vector3(this.ball.p.x, this.ball.p.y, this.ball.p.z);
     for (const p of this.players) {
       p.syncRig(dt, look);
@@ -364,12 +372,14 @@ export class Game {
     this.strikes++;
     this.lastHitT = this.clock;
     this.lastShot = type;
+    const hot = p.human && this.hot[p.index];
+    this.ballView.hot = hot;
     this.replay.mark('hit', this.clock, contact.x, contact.z);
     const speed = Math.hypot(v.x, v.y, v.z);
     this.ballView.flash(contact, Math.min(1, speed / 22));
     this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position), quality);
     if (speed > 17) { this.dir.bump(0.25); this.hitStop = 0.05; }
-    if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type, label: `${p.shot?.label ? p.shot.label + ' ' : ''}${SHOT_NAME[type]}` });
+    if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type, label: `${hot ? 'On fire · ' : ''}${p.shot?.label ? p.shot.label + ' ' : ''}${SHOT_NAME[type]}` });
     if (this.strikes >= 6) this.hud.rally(this.strikes);
     this.afterStrike();
     this.audio.crowdLevel(0.0, 0.4);
@@ -551,6 +561,8 @@ export class Game {
     const plan = p.plan!;
     const c = this.committed[p.index];
     const tTo = plan.tContact - this.clock;
+    // a ball out of reach: the last stride becomes a lunge
+    if (plan.lunge && tTo < 0.32 && tTo > 0) p.rig.lunge(plan.ball, tTo + 0.35);
     if (!p.human) {
       const type = p.shot?.type;
       const lead = plan.volley ? 0.42 : plan.smash ? 0.6 : 0.62;
@@ -596,13 +608,28 @@ export class Game {
       return;
     }
     let quality: number;
+    const inSpeed = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
     if (p.human) {
       const err = c!.err;
       quality = THREE.MathUtils.clamp(1 - Math.max(0, Math.abs(err) - 0.07) / 0.3, 0.3, 1);
       // at full stretch (the run got there late) the contact is weaker
       if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
+      // off the sweet spot: the ball came in away from where the paddle wanted it
+      quality *= 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
+      // a hard ball leaves no margin: a block of a smash has to be timed
+      if (inSpeed > 16) quality *= 1 - Math.min(0.6, ((inSpeed - 16) / 10) * (Math.max(0, Math.abs(err) - 0.04) / 0.08));
+      const i = p.index;
+      if (Math.abs(err) < 0.07) this.perfects[i]++;
+      else { this.perfects[i] = 0; this.hot[i] = false; }
+      if (!this.hot[i] && this.perfects[i] >= 3) {
+        this.hot[i] = true;
+        this.hud.call('On fire', `${this.names[i]} · three perfect in a row`, 1.4);
+        this.say(`on fire ${this.names[i]}`);
+        this.audio.ooh(0.5);
+      }
       this.hud.timing(Math.abs(err) < 0.07 ? 'Perfect' : err < 0 ? 'Early' : 'Late', p.index, p.shot?.label ?? '');
     } else quality = THREE.MathUtils.clamp(1 - Math.max(0, dh - 0.3) / 0.85 - dy * 0.3, 0.2, 1);
+    if (plan.lunge) quality *= 0.85;
     this.strike(p, ballV, quality, plan);
     this.committed[p.index] = null;
   }
@@ -627,7 +654,11 @@ export class Game {
     const opp = this.players[1 - p.index];
     let depth: number;
     let spec: ShotSpec;
-    const pw = power * p.skill.power * (0.6 + 0.4 * quality);
+    const hot = p.human && this.hot[p.index];
+    const pw = power * p.skill.power * (0.6 + 0.4 * quality) * (hot ? 1.12 : 1);
+    // what's coming in: pace the paddle has to soak up or can borrow, spin that kicks off the face
+    const inSpeed = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
+    const inRpm = Math.hypot(this.ball.w.x, this.ball.w.y, this.ball.w.z) * 9.55;
     const fromNet = Math.abs(contact.z);
     switch (type) {
       case 'dink':
@@ -654,9 +685,19 @@ export class Game {
         break;
       default:
         depth = HL - 1.0 - Math.random() * 1.6;
-        spec = { speed: 8.5 + 5 * pw, rpm: 500, clear: 0.3 };
+        // kept low when the other player is up at the net (a floater gets put away)
+        spec = { speed: 8.5 + 5 * pw, rpm: 500, clear: Math.abs(opp.pos.z) < NVZ + 1.5 ? 0.16 : 0.3 };
     }
     if (plan.volley && type === 'reset') { depth = 3.8 + Math.random() * 2; spec = { speed: 8 + 6 * pw, rpm: -300, clear: 0.12 }; }
+    // a soft shot off a hard ball: the paddle face gives it back with interest unless it's taken off
+    const soft = type === 'dink' || type === 'drop' || type === 'reset';
+    const absorb = soft ? THREE.MathUtils.clamp((inSpeed - 10) / 14, 0, 1) : 0;
+    if (absorb > 0) {
+      depth += absorb * (0.3 + Math.random()) * (1.25 - quality);
+      spec.speed *= 1 + absorb * 0.22;
+    }
+    // a volleyed drive borrows the incoming pace (the counter)
+    if (type === 'drive' && plan.volley) spec.speed += Math.min(4, inSpeed * 0.18);
     if (p.human && shot.rpm !== undefined && type !== 'smash') {
       spec.rpm = shot.rpm;
       // topspin pulls a hard ball down into the court: more pace with the same margin; slice floats
@@ -671,11 +712,17 @@ export class Game {
       const incoming = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
       // heavy spin coming in is harder to handle
       const spinIn = Math.hypot(this.ball.w.x, this.ball.w.y, this.ball.w.z) * 9.55;
-      const pressure = Math.max(0, plan.late + 0.15) * 0.4 + Math.min(0.08, incoming / 300) + (type === 'drive' ? 0.02 : 0) + (contact.y < 0.3 ? 0.03 : 0) + Math.min(0.07, Math.max(0, spinIn - 600) / 25000);
+      const pressure = Math.max(0, plan.late + 0.05) * 0.4 + Math.min(0.06, incoming / 400) + (type === 'drive' ? 0.02 : 0) + (contact.y < 0.3 ? 0.03 : 0) + Math.min(0.07, Math.max(0, spinIn - 600) / 25000)
+        + absorb * 0.05 + Math.max(0, incoming - 19) / 50 + (plan.lunge ? 0.04 : 0);
       if (Math.random() < L.errors + pressure) forced = type === 'dink' || type === 'drop' ? (Math.random() < 0.6 ? 'net' : 'wide') : (['long', 'wide', 'net'] as const)[Math.floor(Math.random() * 3)];
       // the classic pickleball mistake: a touch shot that floats up, attackable
-      else if ((type === 'dink' || type === 'drop' || type === 'reset') && Math.random() < L.errors * 1.6 + pressure * 0.8) forced = 'pop';
+      else if ((type === 'dink' || type === 'drop' || type === 'reset') && Math.random() < L.errors * 1.2 + pressure * 0.5) forced = 'pop';
     } else if ((type === 'dink' || type === 'drop') && quality < 0.6 && Math.random() < 0.7) forced = 'pop';
+    else if (absorb > 0 && Math.random() < absorb * (1.1 - quality) * 0.9) forced = 'pop';
+    // a mistimed swing at a smash just gets a frame on it
+    else if (p.human && inSpeed > 17 && quality < 0.6 && Math.random() < 0.55) forced = 'pop';
+    // a badly mistimed swing: framed into the net, or a hard one sails
+    else if (p.human && quality < 0.55 && Math.random() < (0.55 - quality) * 1.3) forced = pw > 0.55 && Math.random() < 0.6 ? 'long' : 'net';
     let tx = aimX * (HW - 0.45);
     if (forced === 'long') depth = HL + 0.3 + Math.random() * 1.2;
     if (forced === 'wide') tx = Math.sign(tx || Math.random() - 0.5) * (HW + 0.2 + Math.random() * 0.8);
@@ -686,10 +733,12 @@ export class Game {
       spec = { speed: 7.5 + Math.random() * 2, rpm: 300, clear: 0.9 + Math.random() * 0.4, soft: true };
       this.say(`pop-up ${this.names[p.index]}`);
     }
-    const sigma = (0.12 + (1 - quality) * 1.1 + pw * pw * 0.3) * (1.35 - p.skill.accuracy) * (p.human ? 0.55 : 1);
+    // on the run, and against heavy spin, the face is harder to hold steady
+    const sigma = (0.12 + (1 - quality) * 1.1 + pw * pw * 0.3) * (1.35 - p.skill.accuracy) * (p.human ? 0.8 : 1)
+      * (1 + p.vel.length() * 0.1) * (1 + Math.max(0, inRpm - 900) / 3000) * (hot ? 0.65 : 1);
     const target = { x: tx * s + gauss() * sigma, z: -s * (depth + gauss() * sigma * 0.8) };
-    if (forced === 'wide') spec.commit = true;
-    if (forced === 'long') spec.commit = true;
+    // a wide or long miss still clears the net (a touch shot finds the pace for it)
+    if ((forced === 'wide' || forced === 'long') && !spec.soft) spec.commit = true;
     const sol = solveShot({ x: contact.x, y: contact.y, z: contact.z }, target, spec);
     this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
     this.launch(p, { x: contact.x, y: contact.y, z: contact.z }, sol.v, sol.w, type, power, quality);
@@ -759,6 +808,36 @@ export class Game {
     }
   }
 
+  /**
+   * The ball hits a player before it bounces (a drive at the body they couldn't get the paddle
+   * to): the point goes to the hitter, wherever it was going.
+   */
+  private bodyCheck() {
+    if (this.state !== 'rally' || this.dead || this.pendingPoint || this.lastHitter === null || this.bouncesAfterHit > 0 || this.clock - this.lastHitT < 0.12) return;
+    const R = this.players[1 - this.lastHitter];
+    const a = this.prevBall, b = this.ball.p;
+    // closest approach of this frame's ball path to the body's axis (in plan)
+    const sx = b.x - a.x, sz = b.z - a.z;
+    const l2 = sx * sx + sz * sz;
+    const t = l2 > 1e-9 ? THREE.MathUtils.clamp(((R.pos.x - a.x) * sx + (R.pos.z - a.z) * sz) / l2, 0, 1) : 1;
+    const cx = a.x + sx * t, cz = a.z + sz * t, cy = a.y + (b.y - a.y) * t;
+    if (Math.hypot(cx - R.pos.x, cz - R.pos.z) > 0.19 || cy < 0.3 || cy > 1.7) return;
+    // a stroke on its way to this ball gets the paddle there first
+    const plan = R.plan;
+    if (plan && plan.tContact - this.clock < 0.08 && (R.human ? this.committed[R.index] : plan.swung)) return;
+    this.dead = true;
+    this.say(`body shot ${this.names[R.index]}`);
+    const v = this.ball.v;
+    this.ball.v = v3(-v.x * 0.15, Math.min(0, v.y) * 0.2, -v.z * 0.12);
+    this.ball.w = v3();
+    R.rig.cancelStroke();
+    R.rig.react('dust', 1.4);
+    this.audio.bounce(this.world.venue.surface, 2, this.pan(R.pos), R.pos.distanceTo(this.camera.position));
+    this.audio.ooh(0.8);
+    this.hud.call('Body shot', `${this.names[this.lastHitter]} tags ${this.names[R.index]}`, 1.6);
+    this.pendingPoint = { winner: this.lastHitter, reason: 'winner', at: this.clock + 0.7 };
+  }
+
   private onBallDead() {
     if (this.pendingPoint || this.lastHitter === null || this.state !== 'rally') return;
     const hitter = this.players[this.lastHitter];
@@ -776,6 +855,9 @@ export class Game {
     const wasServer = m.server;
     const res = m.rallyTo(w, reason, rally);
     this.lastResult = res;
+    this.perfects[1 - w] = 0;
+    this.hot[1 - w] = false;
+    this.ballView.hot = false;
     this.say(`RALLY ${this.names[w]} (${reason}) strikes=${rally} → ${m.call()} games ${m.games.join('-')}`);
     this.highlight = (reason === 'winner' && rally >= 4) || rally >= 10 || reason === 'ace';
     this.setState('pointOver');
