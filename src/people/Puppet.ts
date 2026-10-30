@@ -109,6 +109,8 @@ export class Puppet {
   private hipRatio = 1;
   readonly paddle: THREE.Object3D;
   private tHand!: THREE.Bone;
+  private tUpper: THREE.Bone | null = null;
+  private tFore: THREE.Bone | null = null;
   private sHand: THREE.Bone;
   /** the paddle in this hand's frame: the handle through the closed fist */
   private gripPos = new THREE.Vector3();
@@ -207,6 +209,8 @@ export class Puppet {
     this.sHand = sb.Bip01_R_Hand;
     this.hips = tb.Hips;
     this.tHand = tb.RightHand;
+    this.tUpper = tb.RightArm ?? null;
+    this.tFore = tb.RightForeArm ?? null;
     this.hipRatio = tb.Hips.getWorldPosition(_v).y / Math.max(0.5, sb.Bip01_Pelvis.getWorldPosition(_w).y);
     // headwear: fitted in the scan's own T-pose (head upright, facing +z), then carried by the head bone
     if (tb.Head) this.dress(tb.Head, tb.head_end, look);
@@ -399,6 +403,40 @@ export class Puppet {
     void meshInv;
   }
 
+  /**
+   * Copied rotations put this body's hand somewhere near the rig's (the scan's arms and shoulders
+   * aren't the rig's), and the game's contact maths is the rig's paddle. So the arm is solved
+   * again: two-bone IK from this shoulder to the hand frame that holds the paddle exactly where the
+   * game has it, the elbow kept on the side the copied pose bent it to.
+   */
+  private reachPaddle() {
+    const up = this.tUpper, fo = this.tFore, hd = this.tHand;
+    if (!up || !fo) return;
+    this.srcPaddle.updateWorldMatrix(true, false);
+    this.srcPaddle.matrixWorld.decompose(_pp, _pq, _ps);
+    // the hand frame that puts this fist's paddle on the game's
+    const qHand = _qh.copy(_pq).multiply(_gi.copy(this.gripQuat).invert());
+    const target = _tg.copy(_pp).sub(_w.copy(this.gripPos).multiplyScalar(this.scale).applyQuaternion(qHand));
+    const S = up.getWorldPosition(_s), E = fo.getWorldPosition(_e), H = hd.getWorldPosition(_h);
+    const a = S.distanceTo(E), b = E.distanceTo(H);
+    const toT = _d.copy(target).sub(S);
+    const d = THREE.MathUtils.clamp(toT.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3);
+    toT.normalize();
+    // the bend plane: where the copied elbow points, off the shoulder→hand line
+    const pole = _pole.copy(E).sub(S);
+    pole.addScaledVector(toT, -pole.dot(toT));
+    if (pole.lengthSq() < 1e-6) pole.set(0, -1, 0).addScaledVector(toT, -toT.y);
+    pole.normalize();
+    const cosA = THREE.MathUtils.clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1);
+    const elbow = _el.copy(S).addScaledVector(toT, a * cosA).addScaledVector(pole, a * Math.sqrt(1 - cosA * cosA));
+    // upper arm onto the new elbow, forearm onto the target, then the hand's turn
+    turnTo(up, S, E, elbow);
+    const E2 = fo.getWorldPosition(_e), H2 = hd.getWorldPosition(_h);
+    turnTo(fo, E2, H2, target);
+    setWorldQuat(hd, qHand);
+    hd.updateMatrixWorld(true);
+  }
+
   /** copy the Rocketbox pose onto the body (call after the rig / a replay frame has posed it) */
   update() {
     const src = this.src;
@@ -420,6 +458,8 @@ export class Puppet {
       p.t.quaternion.copy(_q2.multiply(_q));
       p.t.updateMatrixWorld(true);
     }
+    // the arm reaches for the game's paddle: this body's arms aren't the rig's length
+    this.reachPaddle();
     // the paddle: in this hand's fist, turned as the hidden hand turns the game's paddle
     const hq = this.tHand.getWorldQuaternion(_q);
     const hp = this.tHand.getWorldPosition(_v).add(_w.copy(this.gripPos).multiplyScalar(this.scale).applyQuaternion(hq));
@@ -456,6 +496,20 @@ function mergeTwo(a: THREE.BufferGeometry, b: THREE.BufferGeometry): THREE.Buffe
   out.setIndex([...ia, ...ib]);
   out.computeVertexNormals();
   return out;
+}
+
+const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion(), _ps = new THREE.Vector3(), _qh = new THREE.Quaternion(), _gi = new THREE.Quaternion();
+const _tg = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Vector3(), _h = new THREE.Vector3(), _d = new THREE.Vector3(), _pole = new THREE.Vector3(), _el = new THREE.Vector3();
+const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3(), _tq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
+/** turn a bone (about its own origin `o`) so its child at `from` swings onto `to` */
+function turnTo(bone: THREE.Object3D, o: THREE.Vector3, from: THREE.Vector3, to: THREE.Vector3) {
+  _a1.copy(from).sub(o).normalize();
+  _a2.copy(to).sub(o).normalize();
+  if (_a1.lengthSq() < 1e-8 || _a2.lengthSq() < 1e-8) return;
+  _tq.setFromUnitVectors(_a1, _a2);
+  bone.getWorldQuaternion(_wq);
+  setWorldQuat(bone, _tq.multiply(_wq));
+  bone.updateMatrixWorld(true);
 }
 
 function setWorldQuat(o: THREE.Object3D, q: THREE.Quaternion) {

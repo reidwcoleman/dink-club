@@ -5,7 +5,7 @@ import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
 import { FENCE } from '../world/Club.ts';
 import { Match, type PointReason } from './Match.ts';
-import { Player, type Plan } from './Player.ts';
+import { Player, REACH, type Plan } from './Player.ts';
 import { PlayerRig, type StrokeKind } from './PlayerRig.ts';
 import { Human, type Outfit } from '../people/Human.ts';
 import { BallView } from './BallView.ts';
@@ -708,8 +708,8 @@ export class Game {
     // contact
     const b = this.ball.p;
     const ballV = new THREE.Vector3(b.x, b.y, b.z);
-    const lat = plan.smash ? 0.25 : plan.forehand ? 0.62 : 0.56;
-    const ahead = plan.smash ? 0.35 : plan.volley ? 0.5 : 0.38;
+    const lat = plan.smash ? REACH.smashLat : plan.forehand ? REACH.fhLat : REACH.bhLat;
+    const ahead = plan.smash ? REACH.smashAhead : plan.volley ? REACH.volleyAhead : REACH.ahead;
     const ideal = p.pos.clone().addScaledVector(p.right, plan.forehand ? lat : -lat).addScaledVector(p.fwd, ahead);
     const dh = Math.hypot(ideal.x - b.x, ideal.z - b.z);
     const dy = Math.abs(b.y - plan.ball.y);

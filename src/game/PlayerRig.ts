@@ -46,8 +46,8 @@ const STROKES: Record<StrokeKind, Key[]> = {
     { t: 0.2, head: [0.62, 1.42, 0.05], shaft: [0.35, 0.8, -0.3], face: [-0.2, 0.2, -1], chest: 60, hips: 30, lean: 10, knee: 0.5, off: [0.25, 1.3, 0.55] },
     { t: 0.36, head: [0.62, 1.32, -0.55], shaft: [0.18, 0.62, -0.76], face: [0.1, -0.9, 0.3], chest: 88, hips: 45, lean: 12, knee: 0.6, off: [0.55, 1.25, 0.55], pole: [0.35, -1, -0.7] },
     { t: 0.47, head: [0.86, 0.64, -0.3], shaft: [0.3, -0.45, -0.84], face: [0.1, -0.3, 1], chest: 55, hips: 25, lean: 14, knee: 0.55, off: [0.35, 1.15, 0.35], pole: [0.3, -1, -0.2] },
-    { t: CONTACT, head: [0.78, 0.95, 0.45], shaft: [0.95, -0.12, 0.22], face: [0, -0.08, 1], chest: 12, hips: 5, lean: 12, knee: 0.4, off: [-0.1, 1.1, 0.2], pole: [0.2, -1, 0] },
-    { t: 0.7, head: [0.18, 1.62, 0.42], shaft: [-0.35, 0.9, 0.25], face: [-0.6, 0.2, 0.75], chest: -30, hips: -18, lean: 10, knee: 0.35, off: [-0.35, 1.05, 0.05], pole: [0.6, -0.6, 0] },
+    { t: CONTACT, head: [0.78, 0.95, 0.45], shaft: [0.95, -0.12, 0.22], face: [0, -0.08, 1], chest: -4, hips: -14, lean: 16, knee: 0.45, off: [-0.1, 1.1, 0.2], pole: [0.2, -1, 0] },
+    { t: 0.7, head: [-0.08, 1.42, 0.62], shaft: [-0.45, 0.8, 0.4], face: [-0.6, 0.2, 0.75], chest: -30, hips: -18, lean: 12, knee: 0.35, off: [-0.35, 1.05, 0.05], pole: [0.6, -0.6, 0] },
     { t: 1, head: [-0.42, 1.48, -0.3], shaft: [-0.3, -0.12, -0.94], face: [-0.8, 0.3, 0.4], chest: -58, hips: -32, lean: 8, knee: 0.3, off: [-0.25, 1.2, 0.1], pole: [0.8, -0.3, 0.2] },
   ],
   bh: [
@@ -55,7 +55,7 @@ const STROKES: Record<StrokeKind, Key[]> = {
     { t: 0.2, head: [-0.55, 1.4, 0.0], shaft: [-0.35, 0.8, -0.35], face: [0.2, 0.2, -1], chest: -60, hips: -30, lean: 10, knee: 0.5, off: 'grip' },
     { t: 0.36, head: [-0.66, 1.3, -0.55], shaft: [-0.2, 0.6, -0.77], face: [-0.1, -0.9, 0.3], chest: -90, hips: -48, lean: 12, knee: 0.6, off: 'grip', pole: [-0.3, -1, -0.6] },
     { t: 0.47, head: [-0.88, 0.62, -0.28], shaft: [-0.3, -0.45, -0.84], face: [-0.1, -0.3, 1], chest: -55, hips: -25, lean: 14, knee: 0.55, off: 'grip', pole: [-0.2, -1, -0.2] },
-    { t: CONTACT, head: [-0.72, 0.95, 0.45], shaft: [-0.95, -0.1, 0.25], face: [0, -0.08, 1], chest: -12, hips: -5, lean: 12, knee: 0.4, off: 'grip', pole: [-0.2, -1, 0.2] },
+    { t: CONTACT, head: [-0.72, 0.95, 0.45], shaft: [-0.95, -0.1, 0.25], face: [0, -0.08, 1], chest: 4, hips: 12, lean: 16, knee: 0.45, off: 'grip', pole: [-0.2, -1, 0.2] },
     { t: 0.7, head: [-0.1, 1.6, 0.45], shaft: [0.35, 0.9, 0.25], face: [0.6, 0.2, 0.75], chest: 30, hips: 18, lean: 10, knee: 0.35, off: 'grip', pole: [-0.5, -0.8, 0] },
     { t: 1, head: [0.45, 1.5, -0.28], shaft: [0.3, -0.1, -0.94], face: [0.8, 0.3, 0.4], chest: 58, hips: 30, lean: 8, knee: 0.3, off: 'grip', pole: [-0.8, -0.4, 0] },
   ],
@@ -394,18 +394,30 @@ export class PlayerRig {
     const sw = smooth(this.strokeW);
     const chest = lerp(READY.chest, k.chest, sw) * stance + 0;
     const hips = lerp(READY.hips, k.hips, sw) * stance;
-    const lean = lerp(READY.lean, k.lean, sw) * stance + this.runW * 8;
+    // a low ball: get down to it (knees and a hinge at the hips), most at the moment of contact
+    const lowK = this.stroke ? Math.max(0, 0.82 - this.contactLocal.y) * sw * Math.exp(-(((this.strokeT - CONTACT) / 0.3) ** 2)) : 0;
+    const lean = lerp(READY.lean, k.lean, sw) * stance + this.runW * 8 + lowK * 40;
     const knee = lerp(READY.knee, k.knee, sw);
     const lift = (k.lift ?? 0) * sw;
     // root
     const root = h.root;
     root.position.copy(this.pos);
+    // the weight goes into the ball: forward (and a little toward it) through the swing, back after
+    if (this.stroke) {
+      const into = this.stroke && !this.stroke.includes('serve') ? Math.exp(-(((this.strokeT - 0.6) / 0.17) ** 2)) * sw : 0;
+      if (into > 0.01) {
+        const f = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+        const r = new THREE.Vector3(-f.z, 0, f.x);
+        const side = Math.sign(this.contactLocal.x) || 1;
+        root.position.addScaledVector(f, 0.1 * into).addScaledVector(r, 0.035 * side * into);
+      }
+    }
     root.rotation.set(0, rootYaw, 0);
     h.inner.position.set(0, 0, 0);
     root.updateMatrixWorld(true);
     // stance height: knees bent lower the hips
     this.lungeW += ((this.clock < this.lungeUntil ? 1 : 0) - this.lungeW) * Math.min(1, dt * (this.clock < this.lungeUntil ? 9 : 4));
-    const drop = stance * (0.05 + knee * 0.12 + this.lungeW * 0.16);
+    const drop = stance * (0.05 + knee * 0.12 + this.lungeW * 0.16 + lowK * 0.38);
     // ---------------- spine: hips yaw on the spine base, chest on the upper spine, lean forward
     const b = this.bones;
     const up = _u.set(0, 1, 0);
@@ -469,6 +481,14 @@ export class PlayerRig {
       // the foot's home under the hip, offset to its side (right = +1)
       const home = this.pos.clone().addScaledVector(right, f.side * width).addScaledVector(fwd, f.side * 0.03).add(lead);
       home.y = 0;
+      // the step in: on a groundstroke the front foot (the one away from the ball) steps toward the
+      // net as the swing starts and stays planted through the hit
+      if (this.stroke && !this.stroke.includes('Volley') && this.stroke !== 'serve' && this.stroke !== 'smash') {
+        const side = Math.sign(this.contactLocal.x) || 1;
+        const t = this.strokeT;
+        const stepW = smooth(Math.min(1, Math.max(0, (t - 0.2) / 0.2))) * (1 - smooth(Math.min(1, Math.max(0, (t - 0.82) / 0.18))));
+        if (f.side === -side && stepW > 0.01) home.addScaledVector(fwd, 0.24 * stepW).addScaledVector(right, side * 0.06 * stepW);
+      }
       if (this.lungeW > 0.05) {
         // the foot on the ball's side reaches out toward it
         const to = _w.copy(this.lungeAt).sub(this.pos).setY(0);
@@ -579,8 +599,22 @@ export class PlayerRig {
       const off = toWorld([dl.x * (0.25 + 0.75 * bell), dl.y * (0.3 + 0.7 * bell), dl.z * (0.25 + 0.75 * bell)], new THREE.Vector3(), false);
       head.add(off);
     }
-    const shaft = toWorld(k.shaft, new THREE.Vector3(), false).normalize();
+    let shaft = toWorld(k.shaft, new THREE.Vector3(), false).normalize();
     const face = toWorld(k.face, new THREE.Vector3(), false).normalize();
+    {
+      // a ball at full stretch: the paddle comes into line with the arm (a player reaching), and if
+      // even that's short the sweet spot gets as close as an arm and a paddle can
+      const sh = b.Bip01_R_UpperArm.getWorldPosition(new THREE.Vector3());
+      const grip = RACKET.sweet - RACKET.grip;
+      const wristTry = head.clone().addScaledVector(shaft, -grip);
+      const over = wristTry.distanceTo(sh) - this.armLen * 0.93;
+      if (over > 0) {
+        const line = head.clone().sub(sh).normalize();
+        shaft = shaft.lerp(line, Math.min(1, over / 0.22)).normalize();
+        const reach = this.armLen * 0.97 + grip;
+        if (head.distanceTo(sh) > reach) head = sh.clone().addScaledVector(line, reach);
+      }
+    }
     // strength of the keyed arm pose: full in the stance and strokes, a relaxed carry when running
     const armW = Math.max(sw, stance * 0.95);
     if (armW < 0.02) return;

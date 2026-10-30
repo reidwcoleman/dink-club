@@ -20,6 +20,12 @@ export class Audio {
   private voice: SpeechSynthesisVoice | null = null;
   /** spoken calls (off: a club has no umpire — the players call it, and it shows on screen) */
   umpireOn = false;
+  /** silent (tests on the TV: ?mute=1 or window.__mute()) */
+  muted = false;
+  mute(on = true) {
+    this.muted = on;
+    if (this.master) this.master.gain.value = on ? 0 : this.volume;
+  }
   volume = 0.9;
   private samples = new Map<string, AudioBuffer>();
   private ambGain: GainNode | null = null;
@@ -34,7 +40,7 @@ export class Audio {
     const ctx = new AudioContext();
     this.ctx = ctx;
     this.master = ctx.createGain();
-    this.master.gain.value = this.volume;
+    this.master.gain.value = this.muted ? 0 : this.volume;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 3;

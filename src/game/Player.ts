@@ -6,7 +6,7 @@ import type { ShotType } from './Input.ts';
 import type { Puppet } from '../people/Puppet.ts';
 
 /** contact geometry: how far the ball is beside / ahead of the body for each stroke (a paddle is short) */
-export const REACH = { fhLat: 0.62, bhLat: 0.56, smashLat: 0.25, ahead: 0.38, volleyAhead: 0.5, smashAhead: 0.35 };
+export const REACH = { fhLat: 0.45, bhLat: 0.28, smashLat: 0.25, ahead: 0.28, volleyAhead: 0.36, smashAhead: 0.3 };
 
 export interface Skill {
   speed: number; // top speed m/s

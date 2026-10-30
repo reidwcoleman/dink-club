@@ -282,7 +282,9 @@ function start() {
 
 // ---- debug / headless hooks
 const W = window as unknown as Record<string, unknown>;
-W.__cc = { world, renderer, camera, THREE, input, lobby, get game() { return game; }, get crowd() { return crowd; } };
+W.__cc = { world, renderer, camera, THREE, input, lobby, audio, get game() { return game; }, get crowd() { return crowd; } };
+W.__mute = (on = true) => audio.mute(on);
+if (params.get('mute') === '1') audio.mute(true);
 W.__pump = (n: number, dt = 1 / 60) => {
   cancelAnimationFrame(raf);
   for (let i = 0; i < n; i++) step(dt);
