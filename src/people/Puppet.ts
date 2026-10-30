@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Human } from './Human.ts';
 import { GFX } from '../render/gfx.ts';
+import { MeshoptSimplifier } from 'meshoptimizer';
 
 /**
  * A realistic body worn over the Rocketbox rig. The athletes are image-to-3D scans with an
@@ -44,10 +45,34 @@ const MAP: [string, string, string | null, string | null][] = [
 ];
 
 const cache = new Map<string, Promise<THREE.Group>>();
+/**
+ * The TV's GPU skins slowly (every frame each body is skinned twice: itself and its planar
+ * shadow): its cut of the scan is simplified again at load, to about a third of the triangles,
+ * keeping the texture seams (meshoptimizer collapses edges but never across a UV seam).
+ */
+async function slim(scene: THREE.Group, keep: number): Promise<THREE.Group> {
+  await MeshoptSimplifier.ready;
+  scene.traverse((o) => {
+    const m = o as THREE.SkinnedMesh;
+    if (!m.isSkinnedMesh || !m.geometry.index) return;
+    const g = m.geometry;
+    const idx = new Uint32Array(g.index!.array as ArrayLike<number>);
+    const pa = g.getAttribute('position'), ua = g.getAttribute('uv');
+    const pos = new Float32Array(pa.count * 3), uv = new Float32Array(pa.count * 2);
+    for (let i = 0; i < pa.count; i++) {
+      pos[i * 3] = pa.getX(i); pos[i * 3 + 1] = pa.getY(i); pos[i * 3 + 2] = pa.getZ(i);
+      uv[i * 2] = ua ? ua.getX(i) : 0; uv[i * 2 + 1] = ua ? ua.getY(i) : 0;
+    }
+    // the texture coordinates ride along as attributes: seams may move only where the picture doesn't tear
+    const [out] = MeshoptSimplifier.simplifyWithAttributes(idx, pos, 3, uv, 2, [5, 5], null, Math.floor((idx.length * keep) / 3) * 3, 0.06, ['Permissive']);
+    g.setIndex(new THREE.BufferAttribute(out, 1));
+  });
+  return scene;
+}
 function load(url: string): Promise<THREE.Group> {
   let p = cache.get(url);
   if (!p) {
-    p = new GLTFLoader().loadAsync(url).then((g) => g.scene);
+    p = new GLTFLoader().loadAsync(url).then((g) => (GFX.lite ? slim(g.scene, 0.3) : g.scene));
     cache.set(url, p);
   }
   return p;
@@ -155,7 +180,7 @@ export class Puppet {
   }
 
   static async create(src: Human, srcPaddle: THREE.Object3D, look: BodyLook): Promise<Puppet> {
-    // the TV gets a lighter cut of the same scan (12k triangles, a 1k texture)
+    // the TV gets a much lighter cut of the same scan (3.5k triangles, a 512 px texture): its GPU skins slowly
     const proto = await load(GFX.lite ? look.url.replace(/\.glb$/, '_lite.glb') : look.url);
     return new Puppet(src, srcPaddle, cloneSkinned(proto) as THREE.Group, look);
   }

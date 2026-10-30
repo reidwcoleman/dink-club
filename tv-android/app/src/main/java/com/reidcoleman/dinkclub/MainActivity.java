@@ -39,7 +39,8 @@ public class MainActivity extends Activity {
         web.setFocusableInTouchMode(true);
         setContentView(web);
         web.requestFocus();
-        if (s != null) web.restoreState(s); else web.loadUrl(URL);
+        // a fresh page every launch: after a deploy a cached page would point at files that are gone
+        web.loadUrl(URL + "&v=" + System.currentTimeMillis());
         immersive();
     }
 
