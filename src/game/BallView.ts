@@ -3,9 +3,9 @@ import { BALL_R } from '../sim/dims.ts';
 import type { V3 } from '../sim/Ball.ts';
 
 /**
- * The ball as seen: optic-yellow felt (a fuzzy sheen over a noisy fibre albedo) with the
- * white seam, spinning with the sim's spin vector; a motion streak for fast balls (what a
- * broadcast camera's shutter shows), and a squash on the bounce frame.
+ * The ball as seen: a holed plastic pickleball spinning with the sim's spin vector, a motion
+ * streak for fast balls (what a broadcast camera's shutter shows), a squash on the bounce
+ * frame, and a flash where the paddle meets it.
  */
 export class BallView {
   readonly mesh: THREE.Mesh;
@@ -14,19 +14,23 @@ export class BallView {
   private squash = 0;
   private prev = new THREE.Vector3();
   /** the ball is drawn larger than life so it reads from the broadcast camera */
-  static readonly VIS = 1.7;
+  static readonly VIS = 1.45;
   readonly shadow: THREE.Mesh;
   readonly marker: THREE.Mesh;
   private markerT = 0;
+  readonly flashSprite: THREE.Sprite;
+  private flashT = 1;
+  private flashK = 0;
 
   constructor() {
     const mat = new THREE.MeshPhysicalMaterial({
       map: feltTexture(),
-      roughness: 0.92,
+      roughness: 0.42,
       metalness: 0,
-      sheen: 1,
-      sheenRoughness: 0.35,
-      sheenColor: new THREE.Color(0.9, 1.0, 0.45),
+      clearcoat: 0.5,
+      clearcoatRoughness: 0.3,
+      emissive: new THREE.Color(0.32, 0.36, 0.04),
+      emissiveIntensity: 0.25,
     });
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R * BallView.VIS, 32, 20), mat);
     this.mesh.castShadow = true;
@@ -68,6 +72,27 @@ export class BallView {
     this.marker = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: rt, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false, color: new THREE.Color(1.0, 0.95, 0.5) }));
     this.marker.renderOrder = 2;
     this.marker.visible = false;
+    const fc = document.createElement('canvas');
+    fc.width = fc.height = 128;
+    const fg = fc.getContext('2d')!;
+    const fgr = fg.createRadialGradient(64, 64, 0, 64, 64, 64);
+    fgr.addColorStop(0, 'rgba(255,255,230,1)');
+    fgr.addColorStop(0.25, 'rgba(255,240,150,0.55)');
+    fgr.addColorStop(0.6, 'rgba(255,200,90,0.12)');
+    fgr.addColorStop(1, 'rgba(255,200,90,0)');
+    fg.fillStyle = fgr;
+    fg.fillRect(0, 0, 128, 128);
+    this.flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(fc), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+    this.flashSprite.visible = false;
+    this.flashSprite.renderOrder = 4;
+  }
+
+  /** the paddle meets the ball: a quick bloom (k 0..1 by pace) */
+  flash(p: V3, k: number) {
+    this.flashSprite.position.set(p.x, p.y, p.z);
+    this.flashT = 0;
+    this.flashK = k;
+    this.flashSprite.visible = true;
   }
 
   /** the landing marker: where the ball will bounce on the human's side */
@@ -88,6 +113,14 @@ export class BallView {
   }
 
   update(p: V3, w: V3, v: V3, dt: number, cameraPos: THREE.Vector3) {
+    if (this.flashT < 1) {
+      this.flashT += dt / 0.22;
+      const u = Math.min(1, this.flashT);
+      const sz = (0.25 + 0.55 * this.flashK) * (0.6 + u * 0.9);
+      this.flashSprite.scale.set(sz, sz, 1);
+      this.flashSprite.material.opacity = (1 - u) * (1 - u) * (0.5 + this.flashK);
+      if (u >= 1) this.flashSprite.visible = false;
+    }
     this.mesh.position.set(p.x, p.y, p.z);
     const live = p.y > BALL_R * 1.4 || Math.hypot(v.x, v.z) > 1;
     this.shadow.visible = live && this.mesh.visible && p.y < 14;
@@ -120,36 +153,39 @@ export class BallView {
   }
 }
 
+/** an outdoor pickleball: smooth optic-yellow plastic with 40 round holes (equirect map) */
 function feltTexture(): THREE.CanvasTexture {
-  const W = 512, H = 256;
+  const W = 1024, H = 512;
   const c = document.createElement('canvas');
   c.width = W;
   c.height = H;
   const g = c.getContext('2d')!;
-  const img = g.createImageData(W, H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const n = Math.random() * 0.22 + Math.sin(x * 0.9 + y * 0.3) * 0.02;
-      const o = (y * W + x) * 4;
-      img.data[o] = 205 + n * 60 - 20;
-      img.data[o + 1] = 228 + n * 40 - 15;
-      img.data[o + 2] = 48 + n * 30;
-      img.data[o + 3] = 255;
+  const grd = g.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, '#e2ee2c');
+  grd.addColorStop(0.5, '#eaf33a');
+  grd.addColorStop(1, '#dbe828');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, W, H);
+  // 40 holes spread evenly (a Fibonacci sphere), each drawn as the ellipse it maps to
+  const n = 40;
+  for (let k = 0; k < n; k++) {
+    const y = 1 - (2 * (k + 0.5)) / n;
+    const lat = Math.asin(y);
+    const lon = (k * Math.PI * (3 - Math.sqrt(5))) % (Math.PI * 2);
+    const cx = (lon / (Math.PI * 2)) * W, cy = (0.5 - lat / Math.PI) * H;
+    const r = 0.17; // hole radius (rad)
+    const ry = (r / Math.PI) * H, rx = Math.min(W / 2, (r / (Math.PI * 2)) * W / Math.max(0.12, Math.cos(lat)));
+    for (const dx of [-W, 0, W]) {
+      g.fillStyle = '#7d8a10';
+      g.beginPath();
+      g.ellipse(cx + dx, cy, rx * 1.18, ry * 1.18, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#2c3008';
+      g.beginPath();
+      g.ellipse(cx + dx, cy, rx, ry, 0, 0, Math.PI * 2);
+      g.fill();
     }
-  g.putImageData(img, 0, 0);
-  // the seam: the classic curve on an equirect map (a tennis ball's seam is a closed curve
-  // swinging ±~40° in latitude twice around)
-  g.strokeStyle = 'rgba(244,246,236,0.95)';
-  g.lineWidth = 7;
-  g.beginPath();
-  for (let i = 0; i <= 200; i++) {
-    const u = i / 200;
-    const lat = Math.sin(u * Math.PI * 4) * 0.42 * (0.85 + 0.15 * Math.cos(u * Math.PI * 8));
-    const x = u * W, y = (0.5 - lat / Math.PI) * H;
-    if (i === 0) g.moveTo(x, y);
-    else g.lineTo(x, y);
   }
-  g.stroke();
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;

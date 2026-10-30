@@ -96,8 +96,8 @@ export class Game {
 
   constructor(readonly world: World, readonly camera: THREE.PerspectiveCamera, readonly input: Input, readonly hud: HUD, readonly audio: Audio, readonly crowd: Crowd | null) {
     this.dir = new CameraDirector(camera);
-    world.scene.add(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker);
-    world.dynamic.push(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker);
+    world.scene.add(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite);
+    world.dynamic.push(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite);
     this.ball.surface = world.venue.surface;
   }
 
@@ -335,6 +335,7 @@ export class Game {
     this.lastShot = type;
     this.replay.mark('hit', this.clock, contact.x, contact.z);
     const speed = Math.hypot(v.x, v.y, v.z);
+    this.ballView.flash(contact, Math.min(1, speed / 22));
     this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position));
     if (speed > 17) { this.dir.bump(0.25); this.hitStop = 0.05; }
     if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type });

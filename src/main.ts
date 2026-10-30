@@ -149,7 +149,17 @@ menu.onChange = (key, c) => {
   audio.music(1);
   if (key === 'sky') void world.setSky(c.sky as SkyName);
 };
-addEventListener('pointerdown', () => { audio.start(); if (!inMatch) audio.music(1); }, { once: true });
+// browsers keep audio off until someone clicks or presses a key on the TV's page
+let soundOn = false;
+const unlock = () => {
+  if (soundOn) return;
+  soundOn = true;
+  audio.start();
+  if (!inMatch) audio.music(1);
+  document.body.classList.add('sound-on');
+};
+addEventListener('pointerdown', unlock);
+addEventListener('keydown', unlock);
 
 function togglePause() {
   if (!game || game.state === 'idle') return;

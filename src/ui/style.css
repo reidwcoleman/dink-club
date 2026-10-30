@@ -71,6 +71,9 @@ button { font: inherit; cursor: pointer; }
 .m-status { font-size: 13px; color: var(--ink2); min-height: 16px; text-align: center; }
 .m-keys { font-size: 12.5px; color: var(--ink3); text-align: center; }
 .m-keys b { color: var(--ink2); }
+.m-sound { font-size: 13px; font-weight: 700; color: #1a1208; background: var(--ball); border-radius: 999px; padding: 7px 14px; text-align: center; justify-self: center; animation: nudge2 1.8s ease-in-out infinite; }
+.sound-on .m-sound { display: none; }
+@keyframes nudge2 { 50% { transform: translateY(-3px); } }
 
 /* ------------------------------------------------------------------ hud */
 .hud { position: absolute; inset: 0; }

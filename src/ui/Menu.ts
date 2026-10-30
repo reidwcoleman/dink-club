@@ -73,7 +73,8 @@ export class Menu {
     this.playBtn.onclick = () => this.onPlay?.(this.choice);
     this.status = el('div', 'm-status');
     const keys = el('div', 'm-keys', 'No phone? <b>Space</b> swing · <b>Shift+Space</b> hard · <b>Z</b> dink · <b>X</b> lob');
-    card.append(join, this.slotsEl, opts, this.playBtn, this.status, keys);
+    const snd = el('div', 'm-sound', 'Click anywhere on this screen to turn the sound on');
+    card.append(join, this.slotsEl, opts, this.playBtn, this.status, keys, snd);
     this.root.append(left, card);
     this.setSlots([null, null]);
   }
