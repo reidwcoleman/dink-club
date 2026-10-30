@@ -31,11 +31,11 @@ export interface RosterEntry {
 const ATHLETE = import.meta.env.BASE_URL + 'people/athlete_m1.glb';
 /** the club's regulars (fictional): one scanned athlete in each player's shirt colour */
 export const ROSTER: RosterEntry[] = [
-  { avatar: 'Sports_Male_04', name: 'Dex', outfit: {}, look: { url: ATHLETE, shirtHue: null } },
-  { avatar: 'Sports_Male_04', name: 'Mateo', outfit: {}, look: { url: ATHLETE, shirtHue: 0.49, shirtSat: 0.85 } },
-  { avatar: 'Sports_Male_04', name: 'Gus', outfit: {}, look: { url: ATHLETE, shirtHue: 0.0, shirtSat: 0.05 } },
-  { avatar: 'Sports_Male_04', name: 'Theo', outfit: {}, look: { url: ATHLETE, shirtHue: 0.6, shirtSat: 0.9 } },
-  { avatar: 'Sports_Male_04', name: 'Rafa', outfit: {}, look: { url: ATHLETE, shirtHue: 0.93, shirtSat: 0.8 } },
+  { avatar: 'Sports_Male_04', name: 'Dex', outfit: {}, look: { url: ATHLETE, shirtHue: null, height: 1.0, hat: 'capBack', hatColor: '#1b1d22' } },
+  { avatar: 'Sports_Male_04', name: 'Marcus', outfit: {}, look: { url: ATHLETE, shirtHue: 0.49, shirtSat: 0.85, shorts: '#1a1a1c', skin: [0.4, 0.3, 0.24], height: 1.06, hat: 'band', hatColor: '#f4f4f0' } },
+  { avatar: 'Sports_Male_04', name: 'Gus', outfit: {}, look: { url: ATHLETE, shirtHue: 0.0, shirtSat: 0.05, shorts: '#b9a888', skin: [1.12, 1.06, 1.02], height: 0.96, hat: 'visor', hatColor: '#2a6fdb', glasses: true } },
+  { avatar: 'Sports_Male_04', name: 'Theo', outfit: {}, look: { url: ATHLETE, shirtHue: 0.6, shirtSat: 0.9, shorts: '#e9e7e0', skin: [0.7, 0.57, 0.47], height: 1.02, hat: 'cap', hatColor: '#f2f0ea', glasses: true } },
+  { avatar: 'Sports_Male_04', name: 'Rafa', outfit: {}, look: { url: ATHLETE, shirtHue: 0.93, shirtSat: 0.75, shorts: '#3b3f46', skin: [0.9, 0.82, 0.7], height: 0.98, hat: null } },
 ];
 
 type State = 'idle' | 'preServe' | 'serving' | 'rally' | 'pointOver' | 'replay' | 'matchOver';
@@ -120,6 +120,7 @@ export class Game {
       const rig = new PlayerRig(h, PADDLE_ART[paddle % PADDLE_ART.length]);
       this.world.scene.add(h.root);
       this.world.dynamic.push(h.root);
+      rig.onStep = (x, z) => this.audio.step(0.5 + Math.min(1, this.players?.[i]?.vel.length() ?? 0) * 0.5, this.pan({ x, z, y: 0 }), Math.hypot(x - this.camera.position.x, z - this.camera.position.z));
       const puppet = await Puppet.create(h, rig.racket, r.look);
       this.world.scene.add(puppet.root, puppet.paddle);
       this.world.dynamic.push(puppet.root, puppet.paddle);
@@ -156,15 +157,25 @@ export class Game {
   }
 
   // ------------------------------------------------------------------------------------ points
+  /** where everyone stands for the next serve: the server behind the baseline in the right (even) or left (odd) half, the receiver diagonally */
+  private servePositions(): THREE.Vector3[] {
+    const m = this.match;
+    const right = m.fromRight ? 1 : -1;
+    return this.players.map((p) => p.index === m.server
+      ? new THREE.Vector3(p.side * right * 0.85, 0, p.side * (HL + 0.25))
+      : new THREE.Vector3(p.side * right * 0.95, 0, p.side * (HL + 0.15)));
+  }
+
   private setupPoint() {
     const m = this.match;
     const srv = m.server;
     this.serverIdx = srv;
     const S = this.players[srv], R = this.players[1 - srv];
-    const right = m.fromRight ? 1 : -1;
-    // the server stands behind the baseline in the right (even) or left (odd) half; the receiver diagonally
-    S.place(S.side * right * 0.85, S.side * (HL + 0.25));
-    R.place(R.side * right * 0.95, R.side * (HL + 0.15));
+    const spots = this.servePositions();
+    for (const p of this.players) {
+      p.rig.walking = false;
+      p.place(spots[p.index].x, spots[p.index].z);
+    }
     for (const p of this.players) {
       p.plan = null;
       p.shot = null;
@@ -276,7 +287,8 @@ export class Game {
     R.drive(dt, new THREE.Vector3());
     if (S.human) {
       const sw = this.input.take(S.index, 0.4);
-      if (sw && this.stateT > 0.5) this.startServe({ type: 'serve', aimX: 0, power: sw.power }, sw);
+      // where the paddle face points aims the serve (wide or down the middle)
+      if (sw && this.stateT > 0.5) this.startServe({ type: 'serve', aimX: THREE.MathUtils.clamp(sw.aim ?? 0, -1.2, 1.2), power: sw.power }, sw);
     } else if (this.clock > this.aiServeAt && this.stateT > 1.0) {
       this.startServe(aiServe(this.cfg.level), null);
     }
@@ -320,7 +332,9 @@ export class Game {
     // the diagonal service court: past the kitchen line, deeper with more swing
     const right = this.match.fromRight ? 1 : -1;
     const boxSign = -S.side * right;
-    const wide = THREE.MathUtils.clamp(0.5 + sv.choice.aimX * 0.4 + (Math.random() - 0.5) * 0.3, 0.1, 0.9);
+    // aim (the server's frame: + = their right) → how wide in the box (its outer sideline is boxSign)
+    const toward = S.human ? sv.choice.aimX * S.side * boxSign : sv.choice.aimX;
+    const wide = THREE.MathUtils.clamp(0.5 + toward * 0.42 + (Math.random() - 0.5) * (S.human ? 0.15 : 0.3), 0.08, 0.95);
     const depth = THREE.MathUtils.lerp(NVZ + 2.0, HL - 0.6, Math.min(1, 0.25 + power));
     const acc = S.skill.accuracy;
     const sigma = (0.12 + power * power * 0.4) * (1.3 - acc) * (S.human ? 0.6 : 1);
@@ -353,7 +367,7 @@ export class Game {
     this.replay.mark('hit', this.clock, contact.x, contact.z);
     const speed = Math.hypot(v.x, v.y, v.z);
     this.ballView.flash(contact, Math.min(1, speed / 22));
-    this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position));
+    this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position), quality);
     if (speed > 17) { this.dir.bump(0.25); this.hitStop = 0.05; }
     if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type, label: `${p.shot?.label ? p.shot.label + ' ' : ''}${SHOT_NAME[type]}` });
     if (this.strikes >= 6) this.hud.rally(this.strikes);
@@ -585,6 +599,8 @@ export class Game {
     if (p.human) {
       const err = c!.err;
       quality = THREE.MathUtils.clamp(1 - Math.max(0, Math.abs(err) - 0.07) / 0.3, 0.3, 1);
+      // at full stretch (the run got there late) the contact is weaker
+      if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
       this.hud.timing(Math.abs(err) < 0.07 ? 'Perfect' : err < 0 ? 'Early' : 'Late', p.index, p.shot?.label ?? '');
     } else quality = THREE.MathUtils.clamp(1 - Math.max(0, dh - 0.3) / 0.85 - dy * 0.3, 0.2, 1);
     this.strike(p, ballV, quality, plan);
@@ -645,21 +661,31 @@ export class Game {
       spec.rpm = shot.rpm;
       // topspin pulls a hard ball down into the court: more pace with the same margin; slice floats
       if (type === 'drive' || type === 'reset') spec.speed *= 1 + Math.max(-0.12, shot.rpm / 11000);
+      // a sliced ball from the back needs a little more pace to carry: the player finds it
+      if (shot.rpm < -800 && type === 'reset') spec.soft = true;
     }
     // the computer's errors: long, wide or into the net, more under pressure
-    let forced: 'long' | 'wide' | 'net' | null = null;
+    let forced: 'long' | 'wide' | 'net' | 'pop' | null = null;
     if (!p.human) {
       const L = AI_LEVELS[this.cfg.level];
       const incoming = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
       // heavy spin coming in is harder to handle
       const spinIn = Math.hypot(this.ball.w.x, this.ball.w.y, this.ball.w.z) * 9.55;
       const pressure = Math.max(0, plan.late + 0.15) * 0.4 + Math.min(0.08, incoming / 300) + (type === 'drive' ? 0.02 : 0) + (contact.y < 0.3 ? 0.03 : 0) + Math.min(0.07, Math.max(0, spinIn - 600) / 25000);
-      if (Math.random() < L.errors + pressure) forced = type === 'dink' || type === 'drop' ? (Math.random() < 0.7 ? 'net' : 'wide') : (['long', 'wide', 'net'] as const)[Math.floor(Math.random() * 3)];
-    }
+      if (Math.random() < L.errors + pressure) forced = type === 'dink' || type === 'drop' ? (Math.random() < 0.6 ? 'net' : 'wide') : (['long', 'wide', 'net'] as const)[Math.floor(Math.random() * 3)];
+      // the classic pickleball mistake: a touch shot that floats up, attackable
+      else if ((type === 'dink' || type === 'drop' || type === 'reset') && Math.random() < L.errors * 1.6 + pressure * 0.8) forced = 'pop';
+    } else if ((type === 'dink' || type === 'drop') && quality < 0.6 && Math.random() < 0.7) forced = 'pop';
     let tx = aimX * (HW - 0.45);
     if (forced === 'long') depth = HL + 0.3 + Math.random() * 1.2;
     if (forced === 'wide') tx = Math.sign(tx || Math.random() - 0.5) * (HW + 0.2 + Math.random() * 0.8);
     if (forced === 'net') { spec.clear = -0.2; spec.commit = true; }
+    if (forced === 'pop') {
+      // up over the net by a metre and landing short of the baseline: someone at the kitchen can put it away
+      depth = 3.0 + Math.random() * 1.6;
+      spec = { speed: 7.5 + Math.random() * 2, rpm: 300, clear: 0.9 + Math.random() * 0.4, soft: true };
+      this.say(`pop-up ${this.names[p.index]}`);
+    }
     const sigma = (0.12 + (1 - quality) * 1.1 + pw * pw * 0.3) * (1.35 - p.skill.accuracy) * (p.human ? 0.55 : 1);
     const target = { x: tx * s + gauss() * sigma, z: -s * (depth + gauss() * sigma * 0.8) };
     if (forced === 'wide') spec.commit = true;
@@ -780,7 +806,15 @@ export class Game {
   }
 
   private pointOver(dt: number) {
-    this.idlePlayers(dt);
+    // after a moment the players walk back to where the next point starts
+    if (this.stateT > 0.9 && this.match.winner === null) {
+      const spots = this.servePositions();
+      for (const p of this.players) {
+        p.rig.walking = true;
+        const d = p.pos.distanceTo(spots[p.index]);
+        p.drive(dt, d > 0.15 ? p.seek(spots[p.index], 0.27) : new THREE.Vector3());
+      }
+    } else this.idlePlayers(dt);
     if (this.highlight && this.stateT > 1.2 && this.startReplay()) return;
     const wait = this.lastResult?.game ? 3.4 : 2.3;
     if (this.stateT < wait) return;

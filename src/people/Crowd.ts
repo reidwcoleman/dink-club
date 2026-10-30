@@ -196,7 +196,7 @@ export class Crowd {
       pos.set([s.x, s.y, s.z, s.cover], i * 4);
       face.set([s.nx, s.nz], i * 2);
       const av = Math.floor(R() * this.avatars);
-      look.set([av, R(), palette ? (R() < 0.4 ? 0.55 : 0) : R() < 0.7 ? 0.9 + R() * 0.1 : 0, 0.93 + R() * 0.14], i * 4);
+      look.set([av, R(), palette ? (R() < 0.4 ? 0.55 : 0) : R() < 0.45 ? 0.5 + R() * 0.2 : 0, 0.93 + R() * 0.14], i * 4);
       const c = pickCol();
       tint.set([c.r, c.g, c.b], i * 3);
     });

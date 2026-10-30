@@ -52,12 +52,25 @@ function load(url: string): Promise<THREE.Group> {
   return p;
 }
 
-/** a shirt colour swap: the scan's orange shirt turned to another hue (keeps the fabric's shading) */
+/**
+ * Who this player is, on the shared scan: shirt and shorts colours (the scan's fabric shading
+ * kept), skin tone, height, and what they wear on their head — caps, visors, headbands and
+ * sunglasses are what a club's players actually look like from across a court.
+ */
 export interface BodyLook {
   url: string;
   /** target hue (0..1) for the shirt, or null to keep it */
   shirtHue: number | null;
   shirtSat?: number;
+  /** shorts colour (sRGB hex), or null to keep the navy */
+  shorts?: string | null;
+  /** skin multiplier (linear rgb); [1,1,1] keeps the scan's tan */
+  skin?: [number, number, number];
+  /** standing height relative to the scan (1.70 m) */
+  height?: number;
+  hat?: 'cap' | 'capBack' | 'visor' | 'band' | null;
+  hatColor?: string;
+  glasses?: boolean;
 }
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Matrix4();
@@ -71,6 +84,70 @@ export class Puppet {
   readonly paddle: THREE.Object3D;
   private tHand!: THREE.Bone;
   private sHand: THREE.Bone;
+  private scale = 1;
+
+  /** caps, visors, headbands, sunglasses: built in the world at the bind pose, then parented to the head */
+  private dress(head: THREE.Bone, top: THREE.Bone | undefined, look: BodyLook) {
+    this.root.updateMatrixWorld(true);
+    const hp = head.getWorldPosition(new THREE.Vector3());
+    const tp = top ? top.getWorldPosition(new THREE.Vector3()) : hp.clone().add(new THREE.Vector3(0, 0.21, 0));
+    this.root.worldToLocal(hp);
+    this.root.worldToLocal(tp);
+    // the skull: centre a little below the crown, a touch forward of the head joint
+    const R = 0.098;
+    const c = new THREE.Vector3(hp.x, tp.y - R * 1.02, hp.z + 0.03);
+    const g = new THREE.Group();
+    const col = new THREE.Color(look.hatColor ?? '#f2f2ee');
+    const fabric = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
+    const dark = new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(0.55), roughness: 0.7 });
+    const hat = look.hat ?? null;
+    if (hat === 'cap' || hat === 'capBack') {
+      const crown = new THREE.Mesh(new THREE.SphereGeometry(R * 1.06, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.52), fabric);
+      crown.scale.set(1, 0.9, 1.08);
+      crown.position.set(0, R * 0.3, -R * 0.04);
+      const bill = new THREE.Mesh(billGeo(R * 0.95, R * 0.85), dark);
+      bill.position.set(0, R * 0.36, R * 0.92);
+      const button = new THREE.Mesh(new THREE.SphereGeometry(R * 0.08, 8, 6), fabric);
+      button.position.set(0, R * 1.24, -R * 0.04);
+      g.add(crown, bill, button);
+      if (hat === 'capBack') g.rotation.y = Math.PI;
+    } else if (hat === 'visor') {
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(R * 1.04, R * 1.06, R * 0.42, 28, 1, true), fabric);
+      band.position.y = R * 0.5;
+      const bill = new THREE.Mesh(billGeo(R * 1.05, R * 1.0), dark);
+      bill.position.set(0, R * 0.36, R * 0.98);
+      g.add(band, bill);
+    } else if (hat === 'band') {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(R * 1.03, R * 0.16, 8, 32), fabric);
+      band.rotation.x = Math.PI / 2;
+      band.position.y = R * 0.55;
+      g.add(band);
+    }
+    if (look.glasses) {
+      const lens = new THREE.MeshPhysicalMaterial({ color: 0x111418, roughness: 0.05, metalness: 0.6, clearcoat: 1 });
+      const frame = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4 });
+      for (const sx of [-1, 1]) {
+        const l = new THREE.Mesh(new THREE.SphereGeometry(R * 0.27, 16, 10), lens);
+        l.scale.set(1.15, 0.72, 0.35);
+        l.position.set(sx * R * 0.34, -R * 0.02, R * 0.96);
+        g.add(l);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(R * 0.04, R * 0.05, R * 0.95), frame);
+        arm.position.set(sx * R * 0.84, R * 0.02, R * 0.46);
+        g.add(arm);
+      }
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(R * 0.2, R * 0.04, R * 0.04), frame);
+      bridge.position.set(0, R * 0.04, R * 1.02);
+      g.add(bridge);
+    }
+    if (!g.children.length) return;
+    g.traverse((o) => { if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    // a head is narrower than it is deep
+    g.scale.set(0.84, 1, 0.98);
+    g.position.copy(c);
+    this.root.add(g);
+    g.updateMatrixWorld(true);
+    head.attach(g);
+  }
 
   static async create(src: Human, srcPaddle: THREE.Object3D, look: BodyLook): Promise<Puppet> {
     const proto = await load(look.url);
@@ -100,6 +177,8 @@ export class Puppet {
     this.hips = tb.Hips;
     this.tHand = tb.RightHand;
     this.hipRatio = tb.Hips.getWorldPosition(_v).y / Math.max(0.5, sb.Bip01_Pelvis.getWorldPosition(_w).y);
+    // headwear: fitted in the scan's own T-pose (head upright, facing +z), then carried by the head bone
+    if (tb.Head) this.dress(tb.Head, tb.head_end, look);
     // 1. bend the T-pose onto the A-pose, limb by limb (parents first)
     for (const [tn, , tc, sc] of MAP) {
       const t = tb[tn];
@@ -118,6 +197,10 @@ export class Puppet {
       if (!t || !s) continue;
       this.pairs.push({ t, s, sBindInv: s.getWorldQuaternion(new THREE.Quaternion()).invert(), tAligned: t.getWorldQuaternion(new THREE.Quaternion()) });
     }
+    // standing height
+    this.scale = look.height ?? 1;
+    this.root.scale.setScalar(this.scale);
+    this.hipRatio *= this.scale;
     // 3. the paddle the player sees (the original keeps doing the maths, unseen)
     this.paddle = srcPaddle.clone();
     srcPaddle.visible = false;
@@ -156,6 +239,36 @@ export class Puppet {
   }
 }
 
+/** a cap's bill: a curved, slightly drooping half-disc in front of the brow */
+function billGeo(w: number, d: number): THREE.BufferGeometry {
+  const g = new THREE.CircleGeometry(1, 24, 0, Math.PI);
+  g.rotateX(-Math.PI / 2);
+  const pa = g.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < pa.count; i++) {
+    const x = pa.getX(i), z = -pa.getZ(i);
+    pa.setXYZ(i, x * w, -z * z * d * 0.18 - Math.abs(x) * d * 0.08, z * d * 0.75);
+  }
+  g.computeVertexNormals();
+  const back = g.clone();
+  back.scale(1, 1, 1).translate(0, -0.006, 0);
+  const idx = back.index!;
+  for (let i = 0; i < idx.count; i += 3) { const a = idx.getX(i); idx.setX(i, idx.getX(i + 1)); idx.setX(i + 1, a); }
+  return mergeTwo(g, back);
+}
+
+function mergeTwo(a: THREE.BufferGeometry, b: THREE.BufferGeometry): THREE.BufferGeometry {
+  const out = new THREE.BufferGeometry();
+  const pa = a.getAttribute('position').array as Float32Array, pb = b.getAttribute('position').array as Float32Array;
+  const pos = new Float32Array(pa.length + pb.length);
+  pos.set(pa); pos.set(pb, pa.length);
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const n = pa.length / 3;
+  const ia = Array.from(a.index!.array), ib = Array.from(b.index!.array).map((x) => x + n);
+  out.setIndex([...ia, ...ib]);
+  out.computeVertexNormals();
+  return out;
+}
+
 function setWorldQuat(o: THREE.Object3D, q: THREE.Quaternion) {
   const pq = o.parent!.getWorldQuaternion(new THREE.Quaternion());
   o.quaternion.copy(pq.invert().multiply(q));
@@ -163,15 +276,20 @@ function setWorldQuat(o: THREE.Object3D, q: THREE.Quaternion) {
 
 /** the scan's own texture, with a shirt colour swap and a little sheen on the fabric */
 function bodyMaterial(base: THREE.MeshStandardMaterial, look: BodyLook): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ map: base.map, roughness: 0.78, metalness: 0, side: THREE.FrontSide });
-  if (look.shirtHue === null) return m;
-  const hue = look.shirtHue, sat = look.shirtSat ?? 1;
+  const m = new THREE.MeshStandardMaterial({ map: base.map, roughness: 0.74, metalness: 0, side: THREE.FrontSide });
+  const hue = look.shirtHue ?? -1, sat = look.shirtSat ?? 1;
+  const skin = new THREE.Vector3(...(look.skin ?? [1, 1, 1]));
+  const shorts = look.shorts ? new THREE.Color(look.shorts) : null;
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uHue = { value: hue };
     sh.uniforms.uSat = { value: sat };
+    sh.uniforms.uSkin = { value: skin };
+    sh.uniforms.uShorts = { value: shorts ?? new THREE.Color(0, 0, 0) };
+    sh.uniforms.uShortsOn = { value: shorts ? 1 : 0 };
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-uniform float uHue, uSat;
+uniform float uHue, uSat, uShortsOn;
+uniform vec3 uSkin, uShorts;
 vec3 rgb2hsv( vec3 c ) {
   vec4 K = vec4( 0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0 );
   vec4 p = mix( vec4( c.bg, K.wz ), vec4( c.gb, K.xy ), step( c.b, c.g ) );
@@ -188,10 +306,20 @@ vec3 hsv2rgb( vec3 c ) {
         vec3 hsv = rgb2hsv( diffuseColor.rgb );
         // the orange shirt: nearly pure in linear light (s ≈ 0.98); tanned skin stays under ~0.75
         float shirt = smoothstep( 0.84, 0.93, hsv.y ) * smoothstep( 0.0, 0.025, hsv.x ) * smoothstep( 0.13, 0.09, hsv.x ) * smoothstep( 0.05, 0.15, hsv.z );
-        vec3 dyed = hsv2rgb( vec3( uHue, hsv.y * uSat, hsv.z * ( uSat < 0.2 ? 1.6 : 1.0 ) ) );
-        diffuseColor.rgb = mix( diffuseColor.rgb, dyed, shirt );
+        vec3 dyed = hsv2rgb( vec3( uHue, hsv.y * uSat, hsv.z * ( uSat < 0.2 ? 0.9 : 1.0 ) ) );
+        if ( uHue >= 0.0 ) diffuseColor.rgb = mix( diffuseColor.rgb, dyed, shirt );
+        // skin: warm, mid saturation (the shirt is purer, the shorts blue, the shoes white)
+        float skinK = ( 1.0 - shirt ) * smoothstep( 0.2, 0.36, hsv.y ) * smoothstep( 0.86, 0.78, hsv.y ) * smoothstep( 0.13, 0.08, hsv.x ) * smoothstep( 0.03, 0.08, hsv.z );
+        vec3 toned = diffuseColor.rgb * uSkin;
+        // darker skin is also a little more saturated and warmer
+        toned = mix( vec3( dot( toned, vec3( 0.2126, 0.7152, 0.0722 ) ) ), toned, 1.0 + ( 1.0 - uSkin.g ) * 0.25 );
+        diffuseColor.rgb = mix( diffuseColor.rgb, toned, skinK );
+        // the navy shorts: blue hue, dark
+        float sh = uShortsOn * smoothstep( 0.55, 0.58, hsv.x ) * smoothstep( 0.72, 0.68, hsv.x ) * smoothstep( 0.35, 0.55, hsv.y ) * smoothstep( 0.4, 0.2, hsv.z );
+        float lum = hsv.z / 0.09;
+        diffuseColor.rgb = mix( diffuseColor.rgb, uShorts * clamp( lum, 0.35, 1.6 ), sh );
       }`);
   };
-  m.customProgramCacheKey = () => `puppet-${hue}-${sat}`;
+  m.customProgramCacheKey = () => `puppet-${hue}-${sat}-${skin.toArray().join(',')}-${look.shorts ?? ''}`;
   return m;
 }

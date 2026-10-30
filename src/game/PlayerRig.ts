@@ -157,6 +157,8 @@ export class PlayerRig {
   /** a ball in the off hand (serve toss): world position the rig reports */
   readonly offHand = new THREE.Vector3();
   holdingBall = false;
+  /** walking (between points) rather than playing: the walk clips instead of the stance */
+  walking = false;
   // stroke state
   stroke: StrokeKind | null = null;
   strokeT = 0; // phase 0..1
@@ -341,14 +343,18 @@ export class PlayerRig {
     // keep running through the approach of a stroke (and the recovery after it): the planted-feet
     // stance only takes over once the player has arrived, so there are no stretched sliding strides
     const strokeFree = !this.stroke || this.strokeT < CONTACT - 0.1 || this.strokeT > 0.78;
-    const wantRun = strokeFree && speed > (this.runW > 0.5 ? 1.9 : 2.7) ? 1 : 0;
+    const wantRun = strokeFree && (speed > (this.runW > 0.5 ? 1.9 : 2.7) || (this.walking && speed > 0.3)) ? 1 : 0;
     this.runW += (wantRun - this.runW) * Math.min(1, dt * 7);
     // pick the clip by speed; backpedal plays the walk backwards
     const facing = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const moveDir = speed > 0.05 ? _v.set(this.vel.x / speed, 0, this.vel.z / speed) : facing;
     const along = moveDir.dot(facing);
     let clip = 'idle', rate = 1;
-    if (this.runW > 0.05) {
+    if (this.runW > 0.05 && this.walking && speed < 1.9) {
+      // between points: an unhurried walk back into position
+      if (speed < 1.25) { clip = 'walk'; rate = Math.max(0.4, speed / 1.012); }
+      else { clip = 'walk_fast'; rate = speed / 1.495; }
+    } else if (this.runW > 0.05) {
       if (along < -0.45) { clip = 'jog'; rate = -speed / 2.4; }
       else if (speed < 3.6) { clip = 'jog'; rate = speed / 2.41; }
       else if (speed < 4.8) { clip = 'run'; rate = speed / 2.88; }

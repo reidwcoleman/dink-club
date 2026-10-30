@@ -18,7 +18,8 @@ export class Audio {
   private noiseBuf: AudioBuffer | null = null;
   private reverb!: ConvolverNode;
   private voice: SpeechSynthesisVoice | null = null;
-  umpireOn = true;
+  /** spoken calls (off: a club has no umpire — the players call it, and it shows on screen) */
+  umpireOn = false;
   volume = 0.9;
   private samples = new Map<string, AudioBuffer>();
   private ambGain: GainNode | null = null;
@@ -38,10 +39,11 @@ export class Audio {
     comp.threshold.value = -14;
     comp.ratio.value = 3;
     this.master.connect(comp).connect(ctx.destination);
+    // outdoors: no hall tail, just slaps off the clubhouse, the fences and the bleachers
     this.reverb = ctx.createConvolver();
-    this.reverb.buffer = this.impulse(2.4, 2.2);
+    this.reverb.buffer = this.outdoorImpulse();
     const wet = ctx.createGain();
-    wet.gain.value = 0.22;
+    wet.gain.value = 0.3;
     this.reverb.connect(wet).connect(this.master);
     this.sfx = ctx.createGain();
     this.sfx.gain.value = 0.9;
@@ -108,13 +110,53 @@ export class Audio {
     return true;
   }
 
-  /** the paddle: that hollow pickleball "pock" */
-  pop(power: number, kind: 'soft' | 'mid' | 'hard', pan = 0, dist = 10) {
+  /**
+   * The paddle: that hollow pickleball "pock" — brighter and sharper the harder it's hit; an
+   * off-centre hit (low quality) is a duller, lower "clack" off the edge of the face.
+   */
+  pop(power: number, kind: 'soft' | 'mid' | 'hard', pan = 0, dist = 10, quality = 1) {
     if (!this.ctx) return;
     const near = Math.max(0.3, Math.min(1.3, 12 / (dist + 3)));
     const name = kind === 'soft' ? 'pop3' : kind === 'hard' ? 'pop2' : 'pop1';
-    const ok = this.play(name, (0.5 + power * 0.7) * near, 0.94 + Math.random() * 0.12, pan);
-    if (!ok) this.hit(power, kind === 'soft' ? 'slice' : 'drive', pan, dist);
+    const b = this.samples.get(name);
+    if (!b) { this.hit(power, kind === 'soft' ? 'slice' : 'drive', pan, dist); return; }
+    const { t, out } = this.place(dist, pan);
+    const src = this.ctx.createBufferSource();
+    src.buffer = b;
+    const mishit = quality < 0.6;
+    src.playbackRate.value = (mishit ? 0.8 : 0.93 + power * 0.1) * (0.97 + Math.random() * 0.06);
+    const g = this.ctx.createGain();
+    g.gain.value = (0.5 + power * 0.7) * near * (mishit ? 0.75 : 1);
+    let node: AudioNode = src;
+    if (mishit) {
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 1800;
+      node = src.connect(f);
+      // the rim: a short click
+      this.noise(t, 0.02, 'bandpass', 3400, 3, 0.18 * near, 0.0005, pan);
+    }
+    node.connect(g).connect(out);
+    src.start(t);
+  }
+
+  /** a shoe on acrylic: a soft scuff each step, a short chirp on hard stops */
+  step(strength: number, pan = 0, dist = 10) {
+    if (!this.ctx || !this.noiseBuf) return;
+    const k = Math.max(0.15, Math.min(1, 9 / (dist + 2))) * strength;
+    const { t, out } = this.place(dist, pan);
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900 + Math.random() * 700;
+    bp.Q.value = 0.9;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.11 * k, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+    src.connect(bp).connect(g).connect(out);
+    src.start(t, Math.random() * 2, 0.1);
   }
 
   setVolume(v: number) {
@@ -131,6 +173,38 @@ export class Audio {
       for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay) * (i < 400 ? i / 400 : 1);
     }
     return b;
+  }
+
+  /** a few discrete early reflections (8-90 ms) over a short diffuse 0.5 s decay */
+  private outdoorImpulse(): AudioBuffer {
+    const ctx = this.ctx!;
+    const sr = ctx.sampleRate, n = Math.floor(sr * 0.7);
+    const b = ctx.createBuffer(2, n, sr);
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (const [ms, g] of [[9, 0.5], [23, 0.32], [41, 0.26], [58, 0.18], [87, 0.12]] as const) {
+        const i = Math.floor(((ms + (c ? 3 : 0) + Math.random() * 2) / 1000) * sr);
+        for (let k = 0; k < 40; k++) d[i + k] += (Math.random() * 2 - 1) * g * Math.exp(-k / 9);
+      }
+      for (let i = 0; i < n; i++) d[i] += (Math.random() * 2 - 1) * 0.05 * Math.pow(1 - i / n, 4) * (i > sr * 0.02 ? 1 : 0);
+    }
+    return b;
+  }
+
+  /**
+   * where a sound comes from: sound takes ~38 ms to cross the court and the air takes the
+   * top off with distance, so the far player's hits arrive later and duller
+   */
+  private place(dist: number, pan: number): { t: number; out: AudioNode } {
+    const ctx = this.ctx!;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = Math.max(2600, 16000 - dist * 520);
+    lp.Q.value = 0.5;
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    lp.connect(p).connect(this.sfx);
+    return { t: ctx.currentTime + Math.min(0.08, dist / 343), out: lp };
   }
 
   private makeNoise(seconds: number): AudioBuffer {
@@ -206,7 +280,7 @@ export class Audio {
     if (!this.ctx) return;
     const g = this.murmur.gain;
     g.cancelScheduledValues(this.ctx.currentTime);
-    g.setTargetAtTime(0.012 + level * 0.06, this.ctx.currentTime, time / 3);
+    g.setTargetAtTime(0.004 + level * 0.022, this.ctx.currentTime, time / 3);
   }
 
   private env(g: GainNode, t: number, a: number, peak: number, d: number) {
@@ -271,7 +345,17 @@ export class Audio {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const k = Math.min(1, speed / 25) * Math.max(0.2, Math.min(1, 16 / (dist + 3)));
-    if (surface === 'hard' && this.play('bounce', 0.9 * k + 0.1, 0.95 + Math.random() * 0.1, pan)) return;
+    if (surface === 'hard' && this.samples.get('bounce')) {
+      const { t: t0, out } = this.place(dist, pan);
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.samples.get('bounce')!;
+      src.playbackRate.value = 0.93 + Math.min(1, speed / 25) * 0.12 + Math.random() * 0.04;
+      const g = this.ctx.createGain();
+      g.gain.value = 0.9 * k + 0.08;
+      src.connect(g).connect(out);
+      src.start(t0);
+      return;
+    }
     if (surface === 'hard') {
       this.tone(t, 480, 0.05, 0.35 * k, 'sine', 0.7, pan);
       this.noise(t, 0.035, 'bandpass', 1600, 1.4, 0.35 * k, 0.001, pan);
@@ -305,8 +389,8 @@ export class Audio {
     bp.Q.value = 9;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.09 * strength, t + 0.012);
-    g.gain.setValueAtTime(0.09 * strength, t + 0.05);
+    g.gain.linearRampToValueAtTime(0.045 * strength, t + 0.012);
+    g.gain.setValueAtTime(0.045 * strength, t + 0.04);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
     const p = this.ctx.createStereoPanner();
     p.pan.value = pan;

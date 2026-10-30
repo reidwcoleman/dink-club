@@ -40,6 +40,9 @@ export class World {
 
   private applyLight() {
     const p = this.sky.preset;
+    // aerial haze: the far palms, clubhouse and tree line sit back in the air (the sky dome and tree band carry their own)
+    const haze = p.night ? '#0a0e18' : this.sky.name === 'sunset' ? '#e2b48f' : '#b9cde0';
+    this.scene.fog = new THREE.FogExp2(new THREE.Color(haze).multiplyScalar(1 / Math.max(0.4, this.sky.exposure)), p.night ? 0.006 : 0.0085);
     this.club.setNight(p.night ? 1 : this.sky.name === 'sunset' ? 0.45 : 0, this.sky.exposure);
   }
 

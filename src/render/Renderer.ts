@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+// @ts-expect-error n8ao ships without types
+import { N8AOPostPass } from 'n8ao';
 import {
   EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, SMAAPreset, ToneMappingEffect, ToneMappingMode,
   VignetteEffect, BrightnessContrastEffect, HueSaturationEffect, DepthOfFieldEffect, ChromaticAberrationEffect, NoiseEffect,
@@ -157,6 +159,16 @@ export class Renderer {
       this.scale = s;
       this.resize();
     }
+  }
+
+  /** screen-space ambient occlusion (N8AO) right after the scene pass: contact darkening under feet, benches, the net */
+  private ao: { configuration: Record<string, unknown>; enabled: boolean; setSize: (w: number, h: number) => void } | null = null;
+  enableAO(scene: THREE.Scene) {
+    if (this.ao || this.quality === 'low') return;
+    const ao = new N8AOPostPass(scene, this.camera, innerWidth, innerHeight);
+    Object.assign(ao.configuration, { aoRadius: 0.9, distanceFalloff: 0.35, intensity: 2.2, halfRes: true, depthAwareUpsampling: true, gammaCorrection: false, aoSamples: 12, denoiseSamples: 6, denoiseRadius: 8, color: new THREE.Color(0, 0, 0) });
+    this.composer.addPass(ao, 1);
+    this.ao = ao;
   }
 
   render(dt: number) {

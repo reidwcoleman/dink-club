@@ -85,7 +85,7 @@ async function boot() {
   menu.setStatus('Filling the bleachers…');
   crowd = new Crowd();
   await crowd.bake(renderer.gl, (f) => menu.setStatus(`Filling the bleachers… ${Math.round(f * 100)}%`));
-  crowd.populate(world.club.seats, 0.62, ['#ff8a1f', '#2fc4c0', '#ff4f8b', '#ffd23f', '#3a7bd5', '#1b2a4a', '#f4f4f0', '#7cc36a', '#a066d3', '#ff6b4a', '#222222', '#87ceeb', '#e94f37']);
+  crowd.populate(world.club.seats, 0.62);
   world.scene.add(crowd.mesh);
   game = new Game(world, camera, input, hud, audio, crowd);
   game.onDof = (on, focus, range) => renderer.setDof(on, focus, (range ?? 3) * 1.6, 1.8);
@@ -97,6 +97,7 @@ async function boot() {
   game.onStatus = (slot, text, sub, serve) => lobby.send(slot, { t: 'state', text, sub, serve, score: game?.match ? `${game.match.score[slot]}-${game.match.score[1 - slot]}` : '' });
   game.dir.cut('intro');
   world.finalize();
+  renderer.enableAO(world.scene);
   menu.setStatus('');
   menu.busy(false);
   start();
