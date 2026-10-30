@@ -61,9 +61,10 @@ lobby.onChange = () => {
   }
   for (let i = 0; i < 2; i++) if (lobby.connected(i)) sendState(i);
 };
-lobby.onSwing = (slot, power, lift, at) => {
+lobby.onSwing = (slot, s) => {
   audio.start();
-  input.push(slot, { at, power, lift, from: 'phone' });
+  input.push(slot, { at: s.at, power: s.power, lift: s.lift, face: s.face, aim: s.aim, from: 'phone' });
+  if (!inMatch) menu.swingTest(slot, s.power);
   if (summaryEl && game?.match?.winner !== null) rematch();
 };
 lobby.onTap = (slot, what) => {
@@ -89,7 +90,7 @@ async function boot() {
   game = new Game(world, camera, input, hud, audio, crowd);
   game.onDof = (on, focus, range) => renderer.setDof(on, focus, (range ?? 3) * 1.6, 1.8);
   game.onPadEvent = (slot, kind, data) => {
-    if (kind === 'hit') lobby.send(slot, { t: 'hit', power: data.power as number, quality: data.quality as number, shot: data.shot as string });
+    if (kind === 'hit') lobby.send(slot, { t: 'hit', power: data.power as number, quality: data.quality as number, shot: data.shot as string, label: data.label as string });
     else if (kind === 'whiff') lobby.send(slot, { t: 'whiff' });
     else lobby.send(slot, { t: 'point', won: !!data.won, call: data.call as string });
   };

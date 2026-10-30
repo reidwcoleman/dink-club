@@ -17,6 +17,10 @@ export interface Swing {
   lift: number;
   /** a phone or the keys */
   from: 'phone' | 'keys';
+  /** the screen's tilt to the sky at contact (−1 … +1), null without an orientation sensor */
+  face?: number | null;
+  /** where the face pointed relative to straight ahead (−1 left … +1 right, can exceed), null if unknown */
+  aim?: number | null;
 }
 
 export class Input {

@@ -74,8 +74,8 @@ export class HUD {
     this.pill.classList.toggle('on', !!text);
   }
 
-  timing(text: string, slot: number) {
-    this.timingEl.textContent = text;
+  timing(text: string, slot: number, spin = '') {
+    this.timingEl.innerHTML = esc(text) + (spin ? `<small>${esc(spin)}</small>` : '');
     this.timingEl.className = 'timing on ' + text.toLowerCase().replace(/\s+/g, '-');
     this.timingEl.style.left = slot === 0 ? '50%' : '50%';
     this.timingTimer = 0.9;

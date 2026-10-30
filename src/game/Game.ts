@@ -13,23 +13,29 @@ import { aiChooseShot, aiServe, AI_LEVELS, type Difficulty, type ShotChoice } fr
 import { CameraDirector } from './CameraDirector.ts';
 import { Replay } from './Replay.ts';
 import { PADDLE_ART } from './Racket.ts';
+import { Puppet, type BodyLook } from '../people/Puppet.ts';
 import type { World } from '../world/World.ts';
 import type { Crowd } from '../people/Crowd.ts';
 import type { HUD } from '../ui/HUD.ts';
 import type { Audio } from '../audio/Audio.ts';
 
 export interface RosterEntry {
+  /** the Rocketbox rig that animates the body (hidden) */
   avatar: string;
   name: string;
   outfit: Outfit;
+  /** the realistic body worn over it */
+  look: BodyLook;
 }
 
-/** the club's regulars (fictional), on the Rocketbox athletes and adults dressed for the court */
+const ATHLETE = import.meta.env.BASE_URL + 'people/athlete_m1.glb';
+/** the club's regulars (fictional): one scanned athlete in each player's shirt colour */
 export const ROSTER: RosterEntry[] = [
-  { avatar: 'Sports_Male_04', name: 'Dex', outfit: { top: '#ff8a1f', shorts: '#1b2a4a', socks: '#f4f4f0', shoes: '#f2f2f2' } },
-  { avatar: 'Sports_Female_02', name: 'Marisol', outfit: { top: '#2fc4c0', shorts: '#f4f4f0', socks: '#f4f4f0', shoes: '#f2f2f2' } },
-  { avatar: 'Sports_Male_02', name: 'Gus', outfit: { top: '#f4f4f0', shorts: '#2b4a5e', socks: '#f4f4f0', shoes: '#f2f2f2', trim: '#ff5aa5' } },
-  { avatar: 'Sports_Male_03', name: 'Theo', outfit: { top: '#ffd23f', shorts: '#1a1b1f', socks: '#f4f4f0', shoes: '#f2f2f2' } },
+  { avatar: 'Sports_Male_04', name: 'Dex', outfit: {}, look: { url: ATHLETE, shirtHue: null } },
+  { avatar: 'Sports_Male_04', name: 'Mateo', outfit: {}, look: { url: ATHLETE, shirtHue: 0.49, shirtSat: 0.85 } },
+  { avatar: 'Sports_Male_04', name: 'Gus', outfit: {}, look: { url: ATHLETE, shirtHue: 0.0, shirtSat: 0.05 } },
+  { avatar: 'Sports_Male_04', name: 'Theo', outfit: {}, look: { url: ATHLETE, shirtHue: 0.6, shirtSat: 0.9 } },
+  { avatar: 'Sports_Male_04', name: 'Rafa', outfit: {}, look: { url: ATHLETE, shirtHue: 0.93, shirtSat: 0.8 } },
 ];
 
 type State = 'idle' | 'preServe' | 'serving' | 'rally' | 'pointOver' | 'replay' | 'matchOver';
@@ -46,6 +52,8 @@ export interface GameConfig {
   far: number;
   demo?: boolean;
 }
+
+const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', reset: 'groundstroke', drive: 'drive', lob: 'lob', smash: 'overhead', serve: 'serve' };
 
 /** timing window for a human swing relative to the ideal contact (s) */
 const EARLY = 0.36, LATE = 0.14;
@@ -103,13 +111,21 @@ export class Game {
 
   async setup(cfg: GameConfig, names: [string, string], paddles: [number, number]) {
     this.cfg = cfg;
-    if (this.players) for (const p of this.players) { this.world.scene.remove(p.rig.group); }
+    if (this.players) for (const p of this.players) {
+      this.world.scene.remove(p.rig.group);
+      if (p.puppet) this.world.scene.remove(p.puppet.root, p.puppet.paddle);
+    }
     const make = async (r: RosterEntry, i: 0 | 1, human: boolean, paddle: number) => {
       const h = await Human.create(r.avatar, r.outfit);
       const rig = new PlayerRig(h, PADDLE_ART[paddle % PADDLE_ART.length]);
       this.world.scene.add(h.root);
       this.world.dynamic.push(h.root);
-      return new Player(i, r.name, rig, human, human ? { speed: 4.7, accel: 16, power: 0.95, accuracy: 0.9, spin: 0.85, reaction: 0.12 } : AI_LEVELS[cfg.level].skill);
+      const puppet = await Puppet.create(h, rig.racket, r.look);
+      this.world.scene.add(puppet.root, puppet.paddle);
+      this.world.dynamic.push(puppet.root, puppet.paddle);
+      const pl = new Player(i, r.name, rig, human, human ? { speed: 4.7, accel: 16, power: 0.95, accuracy: 0.9, spin: 0.85, reaction: 0.12 } : AI_LEVELS[cfg.level].skill);
+      pl.puppet = puppet;
+      return pl;
     };
     const a = ROSTER[cfg.near], b = ROSTER[cfg.far];
     this.players = [await make(a, 0, !cfg.demo, paddles[0]), await make(b, 1, cfg.players === 2 && !cfg.demo, paddles[1])];
@@ -223,6 +239,7 @@ export class Game {
     const look = new THREE.Vector3(this.ball.p.x, this.ball.p.y, this.ball.p.z);
     for (const p of this.players) {
       p.syncRig(dt, look);
+      p.puppet?.update();
       this.footSounds(p, dt);
     }
     // the ball rests in the server's hand until the drop
@@ -338,7 +355,7 @@ export class Game {
     this.ballView.flash(contact, Math.min(1, speed / 22));
     this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position));
     if (speed > 17) { this.dir.bump(0.25); this.hitStop = 0.05; }
-    if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type });
+    if (p.human) this.onPadEvent?.(p.index, 'hit', { power, quality, shot: type, label: `${p.shot?.label ? p.shot.label + ' ' : ''}${SHOT_NAME[type]}` });
     if (this.strikes >= 6) this.hud.rally(this.strikes);
     this.afterStrike();
     this.audio.crowdLevel(0.0, 0.4);
@@ -454,7 +471,8 @@ export class Game {
           c.err = err;
           c.swing = sw;
           const type = this.humanShot(p, plan, sw);
-          if (p.shot) { p.shot.type = type; p.shot.power = sw.power; }
+          const sp = this.humanSpin(plan, sw, type);
+          if (p.shot) { p.shot.type = type; p.shot.power = sw.power; p.shot.rpm = sp.rpm; p.shot.label = sp.label; }
         }
       }
       return;
@@ -472,21 +490,43 @@ export class Game {
     }
     if (err > LATE) return;
     const type = this.humanShot(p, plan, sw);
-    p.shot = { type, aimX: 0, aimD: 0, power: sw.power, pressT: sw.at, released: true };
+    const sp = this.humanSpin(plan, sw, type);
+    p.shot = { type, aimX: 0, aimD: 0, power: sw.power, pressT: sw.at, released: true, rpm: sp.rpm, label: sp.label };
     const strikeAt = Math.max(this.clock + 0.06, plan.tContact);
     this.committed[p.index] = { at: strikeAt, err, swing: sw };
     plan.swung = true;
     p.rig.swing(this.strokeFor(p, plan, type), strikeAt - this.clock, plan.ball, p.fwd);
   }
 
-  /** what a phone swing means here: how hard, how upward, and where the ball is */
+  /**
+   * What a phone swing means here. Power picks the pace (soft → dink / drop, hard → drive), the
+   * swing path picks the spin (brushing up = topspin, chopping down = backspin), and the face
+   * (tilted to the sky = open) turns an upward swing into a lob. On a backhand the back of the
+   * phone is the hitting face, so its tilt reads the other way.
+   */
   private humanShot(p: Player, plan: Plan, sw: Swing): ShotType {
     const atKitchen = Math.abs(plan.body.z) < NVZ + 1.1;
+    const open = sw.face == null ? null : plan.forehand ? sw.face : -sw.face;
     if (plan.smash && sw.power > 0.4) return 'smash';
-    if (sw.lift > 0.55 && sw.power > 0.22) return 'lob';
+    const lobby = open === null ? sw.lift > 0.55 : sw.lift > 0.4 && open > 0.3;
+    if (lobby && sw.power > 0.22) return 'lob';
     if (sw.power < 0.3) return atKitchen ? 'dink' : 'drop';
-    if (sw.power < 0.68) return plan.volley && atKitchen && plan.ball.y > 1.0 ? 'drive' : 'reset';
+    if (sw.power < 0.66) return plan.volley && atKitchen && plan.ball.y > 1.0 ? 'drive' : 'reset';
     return 'drive';
+  }
+
+  /** spin (rpm, + topspin) from the swing path and face, and its name */
+  private humanSpin(plan: Plan, sw: Swing, type: ShotType): { rpm: number; label: string } {
+    const open = sw.face == null ? 0 : plan.forehand ? sw.face : -sw.face;
+    let rpm: number;
+    if (type === 'smash') rpm = 300;
+    else if (type === 'lob') rpm = 600 + Math.max(0, sw.lift) * 900;
+    else if (sw.lift >= 0) rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1200 : 2600) * (1 - Math.max(0, open) * 0.5);
+    else rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1400 : 2200) * (1 + Math.max(0, open) * 0.6);
+    rpm = THREE.MathUtils.clamp(rpm, -2300, 2600);
+    const a = Math.abs(rpm);
+    const label = a < 450 ? '' : rpm > 0 ? (a > 1600 ? 'Heavy topspin' : 'Topspin') : a > 1400 ? 'Heavy slice' : 'Slice';
+    return { rpm, label };
   }
 
   private tryStrike(p: Player) {
@@ -545,7 +585,7 @@ export class Game {
     if (p.human) {
       const err = c!.err;
       quality = THREE.MathUtils.clamp(1 - Math.max(0, Math.abs(err) - 0.07) / 0.3, 0.3, 1);
-      this.hud.timing(Math.abs(err) < 0.07 ? 'Perfect' : err < 0 ? 'Early' : 'Late', p.index);
+      this.hud.timing(Math.abs(err) < 0.07 ? 'Perfect' : err < 0 ? 'Early' : 'Late', p.index, p.shot?.label ?? '');
     } else quality = THREE.MathUtils.clamp(1 - Math.max(0, dh - 0.3) / 0.85 - dy * 0.3, 0.2, 1);
     this.strike(p, ballV, quality, plan);
     this.committed[p.index] = null;
@@ -559,9 +599,13 @@ export class Game {
     let aimX = shot.aimX;
     if (p.human) {
       // timing steers: early pulls across the body, late pushes the other way
-      const err = this.committed[p.index]?.err ?? 0;
+      const cm = this.committed[p.index];
+      const err = cm?.err ?? 0;
       const k = THREE.MathUtils.clamp(err / 0.16, -1, 1);
-      aimX = (plan.forehand ? k : -k) * 0.95 + (Math.random() - 0.5) * 0.25;
+      const timing = (plan.forehand ? k : -k) * 0.95;
+      // where the paddle face pointed (the phone's heading at contact) leads; timing adds to it
+      const faceAim = cm?.swing.aim;
+      aimX = faceAim == null ? timing + (Math.random() - 0.5) * 0.25 : THREE.MathUtils.clamp(faceAim, -1.4, 1.4) * 0.75 + timing * 0.3 + (Math.random() - 0.5) * 0.12;
     }
     const s = p.side;
     const opp = this.players[1 - p.index];
@@ -580,7 +624,7 @@ export class Game {
         break;
       case 'lob':
         depth = HL - 0.9;
-        spec = { speed: 11 + 3 * pw, rpm: 900, arc: 'high', clear: 2.2 };
+        spec = { speed: 12.5 + 4 * pw, rpm: 900, arc: 'high', clear: 2.0, soft: true };
         break;
       case 'smash':
         depth = 3.4 + Math.random() * 2;
@@ -597,12 +641,19 @@ export class Game {
         spec = { speed: 8.5 + 5 * pw, rpm: 500, clear: 0.3 };
     }
     if (plan.volley && type === 'reset') { depth = 3.8 + Math.random() * 2; spec = { speed: 8 + 6 * pw, rpm: -300, clear: 0.12 }; }
+    if (p.human && shot.rpm !== undefined && type !== 'smash') {
+      spec.rpm = shot.rpm;
+      // topspin pulls a hard ball down into the court: more pace with the same margin; slice floats
+      if (type === 'drive' || type === 'reset') spec.speed *= 1 + Math.max(-0.12, shot.rpm / 11000);
+    }
     // the computer's errors: long, wide or into the net, more under pressure
     let forced: 'long' | 'wide' | 'net' | null = null;
     if (!p.human) {
       const L = AI_LEVELS[this.cfg.level];
       const incoming = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
-      const pressure = Math.max(0, plan.late + 0.15) * 0.4 + Math.min(0.08, incoming / 300) + (type === 'drive' ? 0.02 : 0) + (contact.y < 0.3 ? 0.03 : 0);
+      // heavy spin coming in is harder to handle
+      const spinIn = Math.hypot(this.ball.w.x, this.ball.w.y, this.ball.w.z) * 9.55;
+      const pressure = Math.max(0, plan.late + 0.15) * 0.4 + Math.min(0.08, incoming / 300) + (type === 'drive' ? 0.02 : 0) + (contact.y < 0.3 ? 0.03 : 0) + Math.min(0.07, Math.max(0, spinIn - 600) / 25000);
       if (Math.random() < L.errors + pressure) forced = type === 'dink' || type === 'drop' ? (Math.random() < 0.7 ? 'net' : 'wide') : (['long', 'wide', 'net'] as const)[Math.floor(Math.random() * 3)];
     }
     let tx = aimX * (HW - 0.45);
@@ -614,9 +665,9 @@ export class Game {
     if (forced === 'wide') spec.commit = true;
     if (forced === 'long') spec.commit = true;
     const sol = solveShot({ x: contact.x, y: contact.y, z: contact.z }, target, spec);
-    this.say(`hit ${this.names[p.index]} ${type} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
-    p.shot = null;
+    this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
     this.launch(p, { x: contact.x, y: contact.y, z: contact.z }, sol.v, sol.w, type, power, quality);
+    p.shot = null;
   }
 
   // ------------------------------------------------------------------------------------ ball events
@@ -762,6 +813,7 @@ export class Game {
   private replayTick(dt: number) {
     const b = this.ballView.mesh.position;
     const playing = this.replay.step(dt);
+    for (const p of this.players) p.puppet?.update();
     this.dir.update(dt, b, this.dir.subject, this.players[1].pos);
     this.onDof?.(true, this.camera.position.distanceTo(b), 3);
     this.world.ballPos.copy(b);

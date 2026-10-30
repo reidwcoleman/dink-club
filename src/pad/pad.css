@@ -21,7 +21,7 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
 .err { color: #ff9b9b; font-size: 14px; text-align: center; min-height: 18px; }
 .fine { color: var(--ink2); font-size: 12px; text-align: center; opacity: 0.7; }
 
-.pad { display: grid; grid-template-rows: auto auto 1fr auto auto auto; gap: 12px; height: calc(100dvh - 32px); max-width: 460px; margin: 0 auto; }
+.pad { display: grid; grid-template-rows: auto auto 1fr auto auto auto auto; gap: 12px; height: calc(100dvh - 32px); max-width: 460px; margin: 0 auto; }
 .top { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
 .top #who { flex: 1; }
 .dot { width: 12px; height: 12px; border-radius: 50%; background: #666; }
@@ -46,3 +46,6 @@ button { font: inherit; color: inherit; border: none; background: none; cursor: 
 .btn { padding: 15px; border-radius: 16px; font-weight: 800; font-size: 17px; color: #1a1208; background: var(--me); }
 .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink); }
 .hint { text-align: center; color: var(--ink2); font-size: 13px; line-height: 1.4; }
+.read { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink2); }
+.read span { flex: 1; font-weight: 600; color: var(--ink); }
+.mini { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; font-weight: 700; }

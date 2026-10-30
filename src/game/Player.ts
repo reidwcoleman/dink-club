@@ -3,6 +3,7 @@ import { PlayerRig, type StrokeKind, angleDiff } from './PlayerRig.ts';
 import { HL, NVZ, FLOOR_HX, FLOOR_HZ } from '../sim/dims.ts';
 import type { BallEvent, V3 } from '../sim/Ball.ts';
 import type { ShotType } from './Input.ts';
+import type { Puppet } from '../people/Puppet.ts';
 
 /** contact geometry: how far the ball is beside / ahead of the body for each stroke (a paddle is short) */
 export const REACH = { fhLat: 0.62, bhLat: 0.56, smashLat: 0.25, ahead: 0.38, volleyAhead: 0.5, smashAhead: 0.35 };
@@ -41,8 +42,10 @@ export class Player {
   side: 1 | -1 = 1;
   plan: Plan | null = null;
   /** chosen shot for the plan (AI decides at planning; the human by button) */
-  shot: { type: ShotType; aimX: number; aimD: number; power: number; pressT: number; released: boolean } | null = null;
+  shot: { type: ShotType; aimX: number; aimD: number; power: number; pressT: number; released: boolean; rpm?: number; label?: string } | null = null;
   moveTarget: THREE.Vector3 | null = null;
+  /** the realistic body drawn over the rig */
+  puppet: Puppet | null = null;
   stamina = 1;
   private planCooldown = 0;
 

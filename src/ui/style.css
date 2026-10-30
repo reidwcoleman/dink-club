@@ -51,6 +51,9 @@ button { font: inherit; cursor: pointer; }
 .m-slot.live { background: rgba(255, 255, 255, 0.1); color: var(--ink); }
 .m-slot .lbl { font-weight: 800; color: var(--ink); }
 .m-slot .nm { flex: 1; }
+.m-slot .swt { font-size: 12px; font-weight: 800; color: var(--ball); opacity: 0; }
+.m-slot .swt.on { animation: swt 1.4s ease; }
+@keyframes swt { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 .m-slot .ok { font-size: 12px; font-weight: 700; color: #7cf29a; }
 .sw { width: 12px; height: 12px; border-radius: 50%; flex: none; display: inline-block; }
 .m-opts { display: grid; gap: 10px; }
@@ -97,6 +100,7 @@ button { font: inherit; cursor: pointer; }
 .pill svg { color: var(--orange); }
 @keyframes nudge { 50% { transform: translate(-50%, -4px); } }
 .timing { position: absolute; bottom: 22vh; transform: translate(-50%, 10px) scale(0.8); font-family: var(--display); font-weight: 800; font-size: 40px; opacity: 0; text-shadow: 0 4px 18px rgba(0, 0, 0, 0.6); transition: all 0.18s; }
+.timing small { display: block; font-size: 20px; font-family: var(--text); font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #ffb36b; text-align: center; }
 .timing.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
 .timing.perfect { color: var(--ball); }
 .timing.early, .timing.late { color: #ffc77a; }

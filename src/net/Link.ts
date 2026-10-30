@@ -13,15 +13,15 @@ const LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 /** phone → TV */
 export type PadMsg =
   | { t: 'hello'; id: string; name: string; paddle: number }
-  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number }
+  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null }
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
-  | { t: 'pong'; k: number };
+  | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
 export type TvMsg =
   | { t: 'welcome'; slot: number; color: string; label: string }
   | { t: 'state'; text: string; sub?: string; serve?: boolean; score?: string }
-  | { t: 'hit'; power: number; quality: number; shot: string }
+  | { t: 'hit'; power: number; quality: number; shot: string; label?: string }
   | { t: 'whiff' }
   | { t: 'point'; won: boolean; call: string }
   | { t: 'ping'; k: number }
@@ -35,6 +35,8 @@ interface Slot {
   name: string;
   paddle: number;
   rtt: number[];
+  /** clock offset samples (phone − TV) with their round trip: the lowest-rtt ones are trusted */
+  offs: { off: number; rtt: number }[];
   pings: Map<number, number>;
 }
 
@@ -43,7 +45,7 @@ export class Lobby {
   peer: Peer | null = null;
   readonly slots: (Slot | null)[] = [null, null];
   status: 'connecting' | 'ready' | 'offline' = 'connecting';
-  onSwing: ((slot: number, power: number, lift: number, at: number) => void) | null = null;
+  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
   onChange: (() => void) | null = null;
   private pingK = 0;
@@ -56,7 +58,7 @@ export class Lobby {
         this.code = code;
         this.status = 'ready';
         this.onChange?.();
-        setInterval(() => this.pingAll(), 1500);
+        setInterval(() => this.pingAll(), 1000);
         return;
       }
     }
@@ -109,6 +111,14 @@ export class Lobby {
     return Math.min(0.15, s[Math.floor(s.length / 2)] / 2);
   }
 
+  /** phone clock − TV clock (s), from the quickest recent pings (NTP-style) */
+  offset(slot: number): number | null {
+    const o = this.slots[slot]?.offs;
+    if (!o || o.length < 2) return null;
+    const best = [...o].sort((a, b) => a.rtt - b.rtt).slice(0, 3);
+    return best.reduce((a, b) => a + b.off, 0) / best.length;
+  }
+
   send(slot: number, m: TvMsg) {
     const s = this.slots[slot];
     if (s && s.conn.open) s.conn.send(m);
@@ -130,14 +140,24 @@ export class Lobby {
         if (slot < 0) { conn.send({ t: 'full' } satisfies TvMsg); setTimeout(() => conn.close(), 500); return; }
         const old = this.slots[slot];
         if (old && old.conn !== conn) old.conn.close();
-        this.slots[slot] = { conn, id: m.id, name: (m.name || `Player ${slot + 1}`).slice(0, 14), paddle: m.paddle | 0, rtt: old?.rtt ?? [], pings: new Map() };
+        this.slots[slot] = { conn, id: m.id, name: (m.name || `Player ${slot + 1}`).slice(0, 14), paddle: m.paddle | 0, rtt: old?.rtt ?? [], offs: old?.offs ?? [], pings: new Map() };
         conn.send({ t: 'welcome', slot, color: SLOT_COLORS[slot], label: `P${slot + 1}` } satisfies TvMsg);
         this.onChange?.();
         return;
       }
       if (slot < 0 || this.slots[slot]?.conn !== conn) return;
       const s = this.slots[slot]!;
-      if (m.t === 'swing') this.onSwing?.(slot, clamp01(m.power), Math.max(-1, Math.min(1, m.lift)), now - this.delay(slot) - Math.min(0.12, Math.max(0, +(m.ago ?? 0))));
+      if (m.t === 'swing') {
+        // when it peaked, on the TV's clock: from the phone's own timestamp and the synced offset
+        // (falls back to arrival − half the round trip − how long the phone took to confirm the peak)
+        let at = now - this.delay(slot) - Math.min(0.12, Math.max(0, +(m.ago ?? 0)));
+        const off = this.offset(slot);
+        if (off !== null && typeof m.tp === 'number') {
+          const synced = m.tp - off;
+          if (synced <= now + 0.02 && synced > now - 0.4) at = synced;
+        }
+        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null });
+      }
       else if (m.t === 'tap') this.onTap?.(slot, m.what);
       else if (m.t === 'pong') {
         const t0 = s.pings.get(m.k);
@@ -145,6 +165,10 @@ export class Lobby {
           s.pings.delete(m.k);
           s.rtt.push(now - t0);
           if (s.rtt.length > 9) s.rtt.shift();
+          if (typeof m.tp === 'number') {
+            s.offs.push({ off: m.tp - (t0 + now) / 2, rtt: now - t0 });
+            if (s.offs.length > 12) s.offs.shift();
+          }
         }
       }
     });

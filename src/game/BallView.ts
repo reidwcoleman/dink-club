@@ -141,17 +141,25 @@ export class BallView {
     // motion streak behind a fast ball: length ≈ distance covered in half a frame's exposure
     const speed = Math.hypot(v.x, v.y, v.z);
     const dist = cameraPos.distanceTo(this.mesh.position);
-    if (speed > 12 && dist > 3) {
-      const len = Math.min(1.1, speed * (1 / 60) * 0.55);
+    // spin shows in the streak's colour: warm for topspin, cool for slice
+    const vh = Math.hypot(v.x, v.z) || 1;
+    const rpm = ((w.x * v.z - w.z * v.x) / vh) * 9.55;
+    const spinK = Math.min(1, Math.max(0, Math.abs(rpm) - 300) / 1600);
+    const sm = this.streak.material as THREE.MeshBasicMaterial;
+    sm.color.setRGB(0.75, 0.9, 0.2).lerp(rpm > 0 ? SPIN_TOP : SPIN_BACK, spinK);
+    if ((speed > 12 || (speed > 6 && spinK > 0.2)) && dist > 3) {
+      const len = Math.min(1.1, speed * (1 / 60) * (0.55 + spinK * 0.9));
       this.streak.visible = true;
       this.streak.position.set(p.x - (v.x / speed) * len * 0.5, p.y - (v.y / speed) * len * 0.5, p.z - (v.z / speed) * len * 0.5);
       this.streak.scale.set(1, 1, len);
       this.streak.lookAt(p.x, p.y, p.z);
-      (this.streak.material as THREE.MeshBasicMaterial).opacity = Math.min(0.35, (speed - 12) / 60);
+      sm.opacity = Math.max(Math.min(0.35, (speed - 12) / 60), spinK * 0.5);
     } else this.streak.visible = false;
     this.prev.set(p.x, p.y, p.z);
   }
 }
+
+const SPIN_TOP = new THREE.Color(1.0, 0.5, 0.12), SPIN_BACK = new THREE.Color(0.25, 0.8, 1.0);
 
 /** an outdoor pickleball: smooth optic-yellow plastic with 40 round holes (equirect map) */
 function feltTexture(): THREE.CanvasTexture {

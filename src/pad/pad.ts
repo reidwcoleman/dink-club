@@ -72,13 +72,20 @@ function paddleScreen() {
       <div class="top"><span class="dot" id="dot"></span><span id="who">Connecting…</span><button class="ic" id="pause" aria-label="Pause"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button></div>
       <div class="msg"><div class="t" id="t">Connecting to the TV…</div><div class="s" id="s">Room ${room}</div></div>
       <div class="paddle" id="paddle"><img src="${BASE}art/${PADDLES[paddle]}" alt="" /><div class="grip"></div></div>
+      <div class="read"><span id="last">Give it a swing to test</span><button class="mini" id="center">Recenter</button></div>
       <div class="meter"><div class="fill" id="fill"></div></div>
       <div class="row"><button class="btn" id="start">Play</button><button class="btn ghost" id="again">Rematch</button></div>
-      <div class="hint">Hold it like a paddle, screen facing the net. Swing soft to dink, hard to drive, upward to lob.</div>
+      <div class="hint">Hold it like a paddle, screen toward the TV. Soft = dink · hard = drive · brush up = topspin · chop down = slice · open face + up = lob. Where the face points is where it goes.</div>
     </div>`;
   (document.getElementById('pause') as HTMLButtonElement).onclick = () => send({ t: 'tap', what: 'pause' });
   (document.getElementById('start') as HTMLButtonElement).onclick = () => send({ t: 'tap', what: 'start' });
   (document.getElementById('again') as HTMLButtonElement).onclick = () => send({ t: 'tap', what: 'again' });
+  (document.getElementById('center') as HTMLButtonElement).onclick = () => { recenter(); setLast('Recentered — aim is straight ahead', 0); };
+}
+
+function setLast(text: string, power: number) {
+  const el = document.getElementById('last');
+  if (el) el.textContent = power ? `${text} · ${Math.round(power * 100)}%` : text;
 }
 
 function setMsg(t: string, s = '') {
@@ -96,7 +103,7 @@ function connect() {
   peer = p;
   p.on('open', () => {
     if (peer !== p) return;
-    const c = p.connect(PEER_PREFIX + room, { reliable: false, serialization: 'json' });
+    const c = p.connect(PEER_PREFIX + room, { reliable: true, serialization: 'json' });
     conn = c;
     c.on('open', () => {
       if (conn !== c) return;
@@ -149,6 +156,7 @@ function onTv(m: TvMsg) {
       break;
     case 'hit':
       buzz(m.power > 0.75 ? 45 : 22);
+      setLast(m.label ?? m.shot, m.power);
       popSound(m.power, m.shot === 'dink' || m.shot === 'drop');
       flash(m.quality > 0.85 ? 'great' : 'ok');
       break;
@@ -160,7 +168,7 @@ function onTv(m: TvMsg) {
       if (m.won) buzz([20, 60, 20]);
       break;
     case 'ping':
-      send({ t: 'pong', k: m.k });
+      send({ t: 'pong', k: m.k, tp: performance.now() / 1000 });
       break;
     case 'full':
       setMsg('The court is full', 'Two paddles are already connected');
@@ -170,26 +178,68 @@ function onTv(m: TvMsg) {
 
 // ------------------------------------------------------------------------------------ swing detection
 async function askMotion(): Promise<boolean> {
-  const DME = window.DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> } | undefined;
+  type Req = { requestPermission?: () => Promise<string> } | undefined;
+  const DME = window.DeviceMotionEvent as unknown as Req;
+  const DOE = window.DeviceOrientationEvent as unknown as Req;
   if (!DME) return false;
   try {
-    if (typeof DME.requestPermission === 'function') {
-      const r = await DME.requestPermission();
-      if (r !== 'granted') return false;
-    }
+    // iOS: both prompts must start inside the tap (no await before them)
+    const asks: Promise<string>[] = [];
+    if (typeof DME.requestPermission === 'function') asks.push(DME.requestPermission());
+    if (DOE && typeof DOE.requestPermission === 'function') asks.push(DOE.requestPermission().catch(() => 'denied'));
+    const res = await Promise.all(asks);
+    if (res.length && res[0] !== 'granted') return false;
   } catch {
     return false;
   }
   addEventListener('devicemotion', onMotion);
+  addEventListener('deviceorientation', onOrient);
   return true;
 }
 
-const START = 240; // deg/s: a swing has begun
-const COOLDOWN = 0.32;
-let swinging = false, peak = 0, peakT = 0, cool = 0;
+/**
+ * The paddle's face: the screen's normal in the earth frame (x east, y north, z up), from the
+ * fused orientation (W3C Z-X'-Y'' Euler angles). `faceUp` is how far the face is tilted to the
+ * sky (an open face), `heading` the compass direction it points. While the phone is held still
+ * the heading drifts toward "forward" (facing the TV), so aim is measured relative to it.
+ */
+const face = { up: 0, heading: 0, ok: false };
+let fwdHeading: number | null = null;
+let calmSince = 0;
+const D2R = Math.PI / 180;
+function onOrient(e: DeviceOrientationEvent) {
+  if (e.alpha === null || e.beta === null || e.gamma === null) return;
+  const a = e.alpha * D2R, b = e.beta * D2R, g = e.gamma * D2R;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+  // third column of R = Rz(a)·Rx(b)·Ry(g): the device z axis (out of the screen) in earth coordinates
+  const nx = ca * sg + sa * sb * cg;
+  const ny = sa * sg - ca * sb * cg;
+  const nz = cb * cg;
+  face.up = nz;
+  face.heading = Math.atan2(nx, ny);
+  face.ok = true;
+  const now = performance.now() / 1000;
+  if (gyro < 45) {
+    if (!calmSince) calmSince = now;
+    // a still, roughly upright paddle: that's the ready position, facing the TV
+    if (now - calmSince > 0.5 && Math.abs(nz) < 0.6) fwdHeading = fwdHeading === null ? face.heading : fwdHeading + wrap(face.heading - fwdHeading) * 0.04;
+  } else calmSince = 0;
+}
+function wrap(x: number) {
+  return Math.atan2(Math.sin(x), Math.cos(x));
+}
+function recenter() {
+  if (face.ok) fwdHeading = face.heading;
+}
+
+const START = 230; // deg/s: a swing has begun
+const COOLDOWN = 0.3;
+let gyro = 0;
+let swinging = false, cool = 0;
 let lastT = 0;
-// recent vertical acceleration samples (for the upward speed at the peak)
-const hist: { t: number; up: number }[] = [];
+// the swing so far: gyro magnitude samples (for a sub-frame peak) and the vertical speed
+const samples: { t: number; g: number; up: number; face: number; head: number }[] = [];
+let vUp = 0;
 
 function onMotion(e: DeviceMotionEvent) {
   const now = performance.now() / 1000;
@@ -199,38 +249,51 @@ function onMotion(e: DeviceMotionEvent) {
   const a = e.acceleration, ag = e.accelerationIncludingGravity;
   if (!r) return;
   const g = Math.hypot(r.alpha ?? 0, r.beta ?? 0, r.gamma ?? 0);
-  // "up" in the phone's frame: gravity's reaction = (with gravity) − (without)
+  gyro = g;
+  // vertical acceleration: the linear acceleration along "up" (gravity's reaction = with − without)
   let up = 0;
   if (a && ag && a.x !== null && ag.x !== null) {
     const gx = (ag.x ?? 0) - (a.x ?? 0), gy = (ag.y ?? 0) - (a.y ?? 0), gz = (ag.z ?? 0) - (a.z ?? 0);
     const gl = Math.hypot(gx, gy, gz) || 1;
-    up = ((a.x ?? 0) * gx + (a.y ?? 0) * gy + (a.z ?? 0) * gz) / gl;
-    // iOS reports the reaction (up) where some Androids report gravity (down); the magnitude
-    // test below works for either, and the sign is checked against the at-rest reading once
-    up *= upSign;
+    up = (((a.x ?? 0) * gx + (a.y ?? 0) * gy + (a.z ?? 0) * gz) / gl) * upSign;
   }
-  hist.push({ t: now, up: up * dt });
-  while (hist.length && now - hist[0].t > 0.3) hist.shift();
+  // a leaky integral: the paddle's vertical speed (leak keeps drift out between swings)
+  vUp = vUp * Math.exp(-dt / (swinging ? 0.6 : 0.15)) + up * dt;
   if (!swinging) {
-    if (g > START && now > cool) {
-      swinging = true;
-      peak = g;
-      peakT = now;
-    }
-  } else if (g > peak) {
-    peak = g;
-    peakT = now;
-  } else if (g < peak * 0.82 || now - peakT > 0.07) {
-    // past the peak: that was the contact
+    samples.length = 0;
+    if (g > START && now > cool) swinging = true;
+  }
+  if (!swinging) return;
+  samples.push({ t: now, g, up: vUp, face: face.up, head: face.heading });
+  const n = samples.length;
+  const k = samples.reduce((bi, s, i) => (s.g > samples[bi].g ? i : bi), 0);
+  // past the peak (falling off, or held there too long): the contact
+  if (n - 1 > k && (g < samples[k].g * 0.8 || now - samples[k].t > 0.07 || n > 30)) {
     swinging = false;
     cool = now + COOLDOWN;
-    let vUp = 0;
-    for (const h of hist) if (h.t <= peakT + 0.001) vUp += h.up;
-    const power = Math.max(0, Math.min(1, (peak - START) / 1350));
-    const lift = Math.max(-1, Math.min(1, vUp / 2.6));
-    send({ t: 'swing', power, lift, peak: Math.round(peak), ago: now - peakT });
+    // parabolic fit through the peak sample and its neighbours: when it really peaked
+    let tPeak = samples[k].t, gPeak = samples[k].g;
+    if (k > 0 && k < n - 1) {
+      const y0 = samples[k - 1].g, y1 = samples[k].g, y2 = samples[k + 1].g;
+      const den = y0 - 2 * y1 + y2;
+      if (den < 0) {
+        const off = THREEclamp((0.5 * (y0 - y2)) / den, -0.5, 0.5);
+        const h = (samples[k + 1].t - samples[k - 1].t) / 2;
+        tPeak += off * h;
+        gPeak = y1 - 0.25 * (y0 - y2) * off;
+      }
+    }
+    const pk = samples[k];
+    const power = THREEclamp((gPeak - START) / 1350, 0, 1);
+    const lift = THREEclamp(pk.up / 2.4, -1, 1);
+    const aim = fwdHeading === null || !face.ok ? null : THREEclamp(wrap(pk.head - fwdHeading) / (40 * D2R), -1.6, 1.6);
+    send({ t: 'swing', power, lift, peak: Math.round(gPeak), tp: tPeak, face: face.ok ? pk.face : null, aim, ago: now - tPeak });
     meter(power);
+    vUp = 0;
   }
+}
+function THREEclamp(x: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, x));
 }
 
 // the sign of "up": at rest, accelerationIncludingGravity should point up (iOS) — calibrate on the first quiet samples

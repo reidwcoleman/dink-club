@@ -97,6 +97,18 @@ export class Menu {
     this.slotsEl.innerHTML = names.map((n, i) => `<div class="m-slot ${n ? 'live' : ''}"><span class="sw" style="background:${SLOT_COLORS[i]}"></span><span class="lbl">P${i + 1}</span><span class="nm">${n ? esc(n) : i === 0 ? 'Waiting for a phone…' : 'Optional second phone'}</span>${n ? '<span class="ok">Connected</span>' : ''}</div>`).join('');
   }
 
+  /** a phone swung in the lobby: show it on its slot */
+  swingTest(slot: number, power: number) {
+    const el = this.slotsEl.children[slot] as HTMLElement | undefined;
+    if (!el) return;
+    let t = el.querySelector('.swt') as HTMLElement | null;
+    if (!t) { t = document.createElement('span'); t.className = 'swt'; el.insertBefore(t, el.querySelector('.ok')); }
+    t.textContent = `Swing ${Math.round(power * 100)}%`;
+    t.classList.remove('on');
+    void t.offsetWidth;
+    t.classList.add('on');
+  }
+
   setStatus(s: string) {
     this.status.textContent = s;
   }
