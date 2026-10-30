@@ -60,7 +60,7 @@ export interface GameConfig {
 const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', reset: 'groundstroke', drive: 'drive', lob: 'lob', smash: 'overhead', serve: 'serve' };
 
 /** timing window for a human swing relative to the ideal contact (s) */
-const EARLY = 0.36, LATE = 0.14;
+const EARLY = 0.3, LATE = 0.18;
 
 export class Game {
   readonly ball = new BallSim();
@@ -104,6 +104,16 @@ export class Game {
   /** the room position that maps to where the player stood when the point started */
   private bodyAnchor: ({ px: number; pz: number; cx: number; cz: number } | null)[] = [null, null];
   private hitStop = 0;
+  /** real seconds (frame dt before any slow motion): swings are judged on it */
+  realClock = 0;
+  /**
+   * The ball got to a human's paddle before their swing did (the TV shows the game a little late,
+   * the phone needs a moment to see a swing, the network a little more): the game all but stops and
+   * waits for it, and the ball is struck right there. Lasts the player's usual delay and a bit.
+   */
+  waitHit: { idx: number; until: number } | null = null;
+  /** each human's usual delay from the ball reaching their paddle (as the game runs it) to their swing landing here, learned as they play */
+  lag = [0.13, 0.13];
   replay!: Replay;
   private highlight = false;
   onMatchOver: ((m: Match) => void) | null = null;
@@ -294,6 +304,13 @@ export class Game {
   // ------------------------------------------------------------------------------------ the frame
   update(dt: number) {
     if (this.state === 'idle') return;
+    this.realClock += dt;
+    if (this.waitHit) {
+      // waiting: all but stopped; once the swing is in, slow enough to see the paddle snap through
+      const w = this.waitHit, P = this.players[w.idx];
+      if (this.state !== 'rally' || !P.plan || (!this.committed[w.idx] && this.realClock > w.until)) this.waitHit = null;
+      else dt *= this.committed[w.idx] ? 0.3 : 0.06;
+    }
     if (this.hitStop > 0) {
       this.hitStop -= dt;
       dt *= 0.25;
@@ -484,6 +501,8 @@ export class Game {
 
   private replan(p: Player, force = false): void {
     if (!this.pred && this.ball.frozen) return;
+    // the ball is at the paddle and the game is waiting on the swing: that's the contact
+    if (p.plan?.waited && !force) return;
     const b = this.ball;
     const pr = predict(b.p, b.v, b.w, b.surface, 4, 1 / 120, 3);
     const events = pr.events.slice();
@@ -549,6 +568,10 @@ export class Game {
     p.drive(dt, target ? p.seek(target, urgency) : new THREE.Vector3());
   }
 
+  private ballVec(): THREE.Vector3 {
+    return new THREE.Vector3(this.ball.p.x, this.ball.p.y, this.ball.p.z);
+  }
+
   private strokeFor(p: Player, plan: Plan, type?: ShotType): StrokeKind {
     if (plan.smash) return 'smash';
     if (type === 'dink' || type === 'drop') return plan.forehand ? 'fhDink' : 'bhDink';
@@ -563,13 +586,16 @@ export class Game {
     const sw = this.input.take(p.index, 0.5);
     const plan = p.plan;
     if (!sw) return;
-    // the swing's moment on the game clock (it may have peaked a few frames ago on the phone)
-    const at = this.clock - Math.max(0, performance.now() / 1000 - sw.at);
+    // the swing's moment in real time (it peaked a moment ago on the phone), against the moment the
+    // ball reached the paddle — less this player's usual delay, so "on time" is on time for them
+    const atReal = this.realClock - Math.max(0, performance.now() / 1000 - sw.at);
+    const contactReal = plan ? plan.realContact ?? this.realClock + (plan.tContact - this.clock) / (this.waitHit ? 0.06 : 1) : 0;
+    const raw = atReal - contactReal;
     const c = this.committed[p.index];
     if (c && plan && this.clock < c.at) {
       // a second, harder swing before contact: that was the backswing; this is the real one
       if (sw.power > c.swing.power * 0.8 || sw.power > 0.3) {
-        const err = at - plan.tContact;
+        const err = raw - this.lag[p.index];
         if (err >= -EARLY && err <= LATE) {
           c.err = err;
           c.swing = sw;
@@ -585,20 +611,24 @@ export class Game {
       if (!p.rig.inStroke) p.rig.swing(sw.power < 0.3 ? 'fhDink' : 'fh', 0.18, p.pos.clone().addScaledVector(p.right, 0.6).addScaledVector(p.fwd, 0.4).setY(0.85), p.fwd);
       return;
     }
-    const err = at - plan.tContact;
+    const err = raw - this.lag[p.index];
     if (err < -EARLY) {
       this.say(`too early ${err.toFixed(2)}`);
       this.hud.timing('Too early', p.index);
       return;
     }
     if (err > LATE) return;
+    // learn this player's delay from the swings that connect
+    this.lag[p.index] = THREE.MathUtils.clamp(this.lag[p.index] * 0.8 + raw * 0.2, 0.02, 0.3);
     const type = this.humanShot(p, plan, sw);
     const sp = this.humanSpin(plan, sw, type);
     p.shot = { type, aimX: 0, aimD: 0, power: sw.power, pressT: sw.at, released: true, rpm: sp.rpm, label: sp.label };
-    const strikeAt = Math.max(this.clock + 0.06, plan.tContact);
+    // the ball is already at the paddle (the game waited): snap the stroke through it now
+    const waiting = !!plan.realContact;
+    const strikeAt = waiting ? this.clock + 0.03 : Math.max(this.clock + 0.05, plan.tContact);
     this.committed[p.index] = { at: strikeAt, err, swing: sw };
     plan.swung = true;
-    p.rig.swing(this.strokeFor(p, plan, type), strikeAt - this.clock, plan.ball, p.fwd);
+    p.rig.swing(this.strokeFor(p, plan, type), strikeAt - this.clock, waiting ? this.ballVec() : plan.ball, p.fwd, 0.02);
   }
 
   /**
@@ -656,8 +686,14 @@ export class Game {
         p.rig.swing(this.strokeFor(p, plan, 'reset'), 6, plan.ball, p.fwd);
         plan.swung = true;
       }
+      if (!c && tTo <= 0 && !plan.waited && !this.dead) {
+        // the ball is at the paddle and the swing hasn't landed yet: wait for it
+        plan.waited = true;
+        plan.realContact = this.realClock;
+        this.waitHit = { idx: p.index, until: this.realClock + this.lag[p.index] + LATE + 0.08 };
+      }
       if (!c) {
-        if (tTo < -LATE - 0.02) {
+        if (plan.waited ? !this.waitHit : tTo < -LATE - 0.02) {
           // never swung: the ball goes by
           this.missed[p.index] = true;
           this.say(`no swing ${this.names[p.index]}`);

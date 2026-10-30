@@ -240,12 +240,12 @@ export class PlayerRig {
   }
 
   /** start a stroke: its contact at time tContact (s from now), meeting the ball at `contact` (world), sending it along aimYaw */
-  swing(kind: StrokeKind, tContact: number, contact: THREE.Vector3, aimDir?: THREE.Vector3) {
+  swing(kind: StrokeKind, tContact: number, contact: THREE.Vector3, aimDir?: THREE.Vector3, minLead = 0.12) {
     this.stroke = kind;
     const now = this.clock;
     const fwdDur = kind === 'serve' ? 0.26 : kind === 'smash' ? 0.26 : kind.includes('Volley') ? 0.12 : kind.includes('Dink') ? 0.16 : 0.2;
     const follow = kind === 'serve' ? 0.55 : kind.includes('Volley') ? 0.3 : kind.includes('Dink') ? 0.35 : 0.45;
-    const tC = now + Math.max(0.12, tContact);
+    const tC = now + Math.max(minLead, tContact);
     this.strokeTimeline = { tStart: now, tFwd: tC - fwdDur, tContact: tC, tEnd: tC + follow };
     this.setContact(contact);
     this.aimYaw = aimDir ? Math.atan2(aimDir.x, aimDir.z) : this.yaw;

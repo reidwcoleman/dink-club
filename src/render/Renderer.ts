@@ -155,8 +155,10 @@ export class Renderer {
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const p80 = sorted[Math.floor(sorted.length * 0.8)];
     let s = this.scale;
-    if (p80 > 1 / 52) s = Math.max(this.minScale, s - 0.06);
-    else if (p80 < 1 / 58.5) s = Math.min(this.maxScale, s + 0.03);
+    // the TV aims for a steady ~45 fps at a sharper picture rather than chasing 60 down to a blur
+    const [down, up] = this.lite ? [1 / 40, 1 / 50] : [1 / 52, 1 / 58.5];
+    if (p80 > down) s = Math.max(this.minScale, s - 0.05);
+    else if (p80 < up) s = Math.min(this.maxScale, s + 0.03);
     if (Math.abs(s - this.scale) > 0.001) {
       this.scale = s;
       this.resize();
@@ -190,7 +192,7 @@ export class Renderer {
     gl.shadowMap.type = on ? THREE.PCFShadowMap : gl.shadowMap.type;
     // a TV's GPU is fill-bound: start lower and let it fall further; shadows re-render every other frame
     gl.shadowMap.autoUpdate = !on;
-    if (on) { this.adaptive = true; this.minScale = 0.45; this.maxScale = 0.75; this.scale = 0.6; this.resize(); }
+    if (on) { this.adaptive = true; this.minScale = 0.5; this.maxScale = 0.85; this.scale = 0.68; this.resize(); }
   }
 
   render(dt: number) {

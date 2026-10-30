@@ -34,6 +34,10 @@ export interface Plan {
   swung: boolean;
   /** reached with a lunge: the player stops short and stretches the last half metre (weaker, less accurate) */
   lunge: boolean;
+  /** a human's plan: the real time (Game.realClock) the ball reached the contact point */
+  realContact?: number;
+  /** the game already paused at contact waiting for this player's swing */
+  waited?: boolean;
 }
 
 /** how far a lunge stretches the reach (m) */
