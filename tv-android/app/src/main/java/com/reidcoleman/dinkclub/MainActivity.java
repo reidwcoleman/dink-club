@@ -24,6 +24,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle s) {
         super.onCreate(s);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        WebView.setWebContentsDebuggingEnabled(true);
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor("#0d1018"));
         WebSettings ws = web.getSettings();

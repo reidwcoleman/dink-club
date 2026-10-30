@@ -145,3 +145,12 @@ button { font: inherit; cursor: pointer; }
 button:focus-visible, .tv button:focus { outline: 3px solid var(--ball); outline-offset: 3px; }
 .segb:focus-visible { outline-offset: 2px; }
 .tv .m-sound { display: none; }
+
+/* the TV: no frosted glass over the live scene (a blur of the canvas every frame is costly there), and a UI scaled to its 960×540 viewport */
+.tv .m-card, .tv .bug, .tv .pill, .tv .padchip, .tv .callout, .tv .rally, .tv .rtag, .tv .ocard, .tv .overlay { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.tv .m-card { background: rgba(16, 20, 30, 0.86); }
+@media (max-height: 640px) {
+  .menu { zoom: 0.72; height: 138.9vh; }
+  .hud { zoom: 0.72; }
+  .overlay .ocard { zoom: 0.8; }
+}

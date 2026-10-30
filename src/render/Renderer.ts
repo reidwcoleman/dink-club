@@ -171,8 +171,26 @@ export class Renderer {
     this.ao = ao;
   }
 
+  /**
+   * lite (the TV): no post chain — the scene straight to the screen with three's own tone
+   * mapping and exposure; a fixed, lower render scale
+   */
+  lite = false;
+  setLite(on: boolean) {
+    this.lite = on;
+    const gl = this.gl;
+    gl.toneMapping = on ? THREE.NeutralToneMapping : THREE.NoToneMapping;
+    gl.shadowMap.type = on ? THREE.PCFShadowMap : gl.shadowMap.type;
+    if (on) { this.adaptive = true; this.minScale = 0.55; this.maxScale = 0.8; this.scale = 0.7; this.resize(); }
+  }
+
   render(dt: number) {
     this.gl.info.reset();
+    if (this.lite) {
+      this.gl.toneMappingExposure = this.exposure.value;
+      this.gl.render(this.renderPass.mainScene, this.camera);
+      return;
+    }
     this.composer.render(dt);
   }
 }

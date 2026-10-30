@@ -3,6 +3,7 @@ import { HL, HW, NVZ, LINE, FLOOR_HX, FLOOR_HZ } from '../sim/dims.ts';
 import { noiseTexture, tex, lin } from '../render/noise.ts';
 import type { Venue } from './venues.ts';
 import { SPACING, FENCE } from './Club.ts';
+import { GFX } from '../render/gfx.ts';
 
 /**
  * The playing floor (a pickleball court on an acrylic club surface: court, a two-tone kitchen,
@@ -35,7 +36,8 @@ export class Court {
       uFloor: { value: new THREE.Vector2(FLOOR_HX, FLOOR_HZ) },
     };
     this.uniforms = u;
-    const m = new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.6 });
+    // (the TV gets the cheaper standard model: the court is most of the screen's pixels)
+    const m = (GFX.lite ? new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 }) : new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.6 })) as THREE.MeshPhysicalMaterial;
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
       sh.vertexShader = sh.vertexShader
@@ -56,7 +58,7 @@ export class Court {
         .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = cRough;')
         .replace('#include <normal_fragment_maps>', 'normal = normalize( ( viewMatrix * vec4( cN, 0.0 ) ).xyz );');
     };
-    m.customProgramCacheKey = () => 'court-pb1';
+    m.customProgramCacheKey = () => 'court-pb1' + (GFX.lite ? 'L' : '');
     this.material = m;
     const hz = (FENCE.zNear - FENCE.zFar) / 2;
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(FENCE.x * 2, hz * 2, 24, 16).rotateX(-Math.PI / 2).translate(0, 0, FENCE.zFar + hz), m);

@@ -11,6 +11,7 @@ import { Audio } from './audio/Audio.ts';
 import type { Difficulty } from './game/AI.ts';
 import type { StrokeKind } from './game/PlayerRig.ts';
 import { Lobby, SLOT_COLORS } from './net/Link.ts';
+import { GFX } from './render/gfx.ts';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -19,14 +20,18 @@ const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 20
 camera.position.set(0, 12, 30);
 camera.lookAt(0, 0, 0);
 
+const onTV = params.get('tv') === '1';
+GFX.lite = onTV || params.get('lite') === '1';
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
 renderer.composer.passes.forEach((p) => ((p as unknown as { mainScene: THREE.Scene }).mainScene = world.scene));
 // on the TV app (an Android TV box's GPU) start lighter; the renderer adapts its resolution from there
-const onTV = params.get('tv') === '1';
 renderer.setQuality((params.get('q') as Quality) ?? (onTV ? 'low' : 'high'));
-if (onTV) world.sky.sun.shadow.mapSize.set(2048, 2048);
+if (GFX.lite) {
+  world.sky.sun.shadow.mapSize.set(1024, 1024);
+  renderer.setLite(true);
+}
 const exMul = +(params.get('ex') ?? 1);
 
 const input = new Input();
