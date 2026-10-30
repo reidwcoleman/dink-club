@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GFX } from '../render/gfx.ts';
 
 export type SkyName = 'day' | 'overcast' | 'sunset' | 'night';
 
@@ -227,7 +228,27 @@ export class Sky {
   }
 
   /** capture the lit scene (stadium, court, sky) into the environment map */
+  /** lite (the TV): a sky/ground hemisphere light stands in for the captured environment */
+  private hemi: THREE.HemisphereLight | null = null;
+  private liteLight() {
+    if (!this.hemi) {
+      this.hemi = new THREE.HemisphereLight();
+      this.scene.add(this.hemi);
+    }
+    const m = this.meta[this.name];
+    const e = m.skyE;
+    const k = this.preset.skyGain;
+    const peak = Math.max(e[0], e[1], e[2], 1e-6);
+    this.hemi.color.setRGB(e[0] / peak, e[1] / peak, e[2] / peak, THREE.LinearSRGBColorSpace);
+    this.hemi.groundColor.setRGB(0.32, 0.36, 0.3, THREE.LinearSRGBColorSpace);
+    this.hemi.intensity = ((e[0] * 0.2126 + e[1] * 0.7152 + e[2] * 0.0722) * k) / Math.PI * 1.6 + (this.preset.night ? 0.25 : 0);
+  }
+
   captureEnv(hide: THREE.Object3D[] = []) {
+    if (GFX.lite) {
+      this.liteLight();
+      return;
+    }
     const was = hide.map((o) => o.visible);
     hide.forEach((o) => (o.visible = false));
     const prevEnv = this.scene.environment;

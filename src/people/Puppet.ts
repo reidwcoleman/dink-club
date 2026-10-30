@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Human } from './Human.ts';
+import { GFX } from '../render/gfx.ts';
 
 /**
  * A realistic body worn over the Rocketbox rig. The athletes are image-to-3D scans with an
@@ -150,7 +151,8 @@ export class Puppet {
   }
 
   static async create(src: Human, srcPaddle: THREE.Object3D, look: BodyLook): Promise<Puppet> {
-    const proto = await load(look.url);
+    // the TV gets a lighter cut of the same scan (12k triangles, a 1k texture)
+    const proto = await load(GFX.lite ? look.url.replace(/\.glb$/, '_lite.glb') : look.url);
     return new Puppet(src, srcPaddle, cloneSkinned(proto) as THREE.Group, look);
   }
 
