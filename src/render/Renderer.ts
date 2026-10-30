@@ -57,7 +57,7 @@ export class Renderer {
     this.gl = new THREE.WebGLRenderer({
       canvas,
       // the TV renders straight to the canvas: hardware MSAA (close to free on a tile-based GPU)
-      antialias: GFX.lite,
+      antialias: GFX.lite && GFX.aa,
       stencil: false,
       depth: true,
       powerPreference: 'high-performance',

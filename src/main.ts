@@ -23,6 +23,10 @@ camera.lookAt(0, 0, 0);
 
 const onTV = params.get('tv') === '1';
 GFX.lite = onTV || params.get('lite') === '1';
+// (TV tuning switches: ?aa=0, ?lam=1, ?recv=0)
+GFX.aa = params.get('aa') !== '0';
+GFX.lambert = params.get('lam') === '1';
+GFX.recv = params.get('recv') !== '0';
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
@@ -150,6 +154,12 @@ function textureDiet() {
     t.needsUpdate = true;
   };
   world.scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!GFX.recv && mesh.isMesh && mesh !== world.court.mesh) mesh.receiveShadow = false;
+    const sm = mesh.material as THREE.MeshStandardMaterial;
+    if (GFX.lambert && mesh.isMesh && !(mesh as THREE.SkinnedMesh).isSkinnedMesh && sm?.type === 'MeshStandardMaterial' && sm.onBeforeCompile === THREE.Material.prototype.onBeforeCompile) {
+      mesh.material = new THREE.MeshLambertMaterial({ color: sm.color, map: sm.map, alphaMap: sm.alphaMap, alphaTest: sm.alphaTest, transparent: sm.transparent, opacity: sm.opacity, side: sm.side, vertexColors: sm.vertexColors, emissive: sm.emissive, emissiveMap: sm.emissiveMap, emissiveIntensity: sm.emissiveIntensity });
+    }
     const mats = (o as THREE.Mesh).material;
     if (!mats) return;
     for (const m of ([] as THREE.Material[]).concat(mats)) {
