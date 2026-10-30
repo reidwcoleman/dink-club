@@ -11,7 +11,7 @@ struct DinkPaddleApp: App {
         WindowGroup {
             Group {
                 if let room = session.room {
-                    PaddleView(room: room) { session.room = nil }
+                    PaddleView(room: room, lan: session.lan) { session.room = nil; session.lan = nil }
                 } else {
                     JoinView(session: session)
                 }
@@ -26,6 +26,8 @@ struct DinkPaddleApp: App {
 /// who is playing and which TV they're joining (remembered between launches)
 final class Session: ObservableObject {
     @Published var room: String?
+    /// the TV app's address on the Wi-Fi, from its QR code ("ip:port")
+    @Published var lan: String?
     @Published var name: String = UserDefaults.standard.string(forKey: "name") ?? "" {
         didSet { UserDefaults.standard.set(name, forKey: "name") }
     }
@@ -44,6 +46,11 @@ final class Session: ObservableObject {
     }
 
     func open(_ url: URL) {
-        if let c = Session.code(from: url.absoluteString) { room = c }
+        if let c = Session.code(from: url.absoluteString) { lan = Session.lan(from: url.absoluteString); room = c }
+    }
+
+    /// the TV app's Wi-Fi address in a join link
+    static func lan(from text: String) -> String? {
+        URLComponents(string: text)?.queryItems?.first(where: { $0.name == "lan" })?.value
     }
 }

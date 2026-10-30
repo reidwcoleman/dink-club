@@ -16,6 +16,9 @@
   <key>LSRequiresIPhoneOS</key><true/>
   <key>NSCameraUsageDescription</key><string>Scan the code on the TV to join, and in "You move" games track where you step in the room (nothing is shown or saved).</string>
   <key>NSMotionUsageDescription</key><string>Your swings are read from the motion sensors so the phone can be your paddle.</string>
+  <key>UIBackgroundModes</key><array><string>audio</string></array>
+  <key>NSLocalNetworkUsageDescription</key><string>Your paddle talks to the Dink Club TV app over your Wi-Fi, so it keeps working with the screen locked.</string>
+  <key>NSBonjourServices</key><array><string>_dinkclub._udp</string></array>
   <key>UILaunchScreen</key><dict><key>UIColorName</key><string></string></dict>
   <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>gyroscope</string></array>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>

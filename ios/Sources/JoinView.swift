@@ -48,7 +48,7 @@ struct JoinView: View {
         .sheet(isPresented: $scanning) {
             ScannerSheet { text in
                 scanning = false
-                if let c = Session.code(from: text) { join(c) } else { error = "That code isn't a Dink Club TV code." }
+                if let c = Session.code(from: text) { session.lan = Session.lan(from: text); join(c) } else { error = "That code isn't a Dink Club TV code." }
             }
         }
     }

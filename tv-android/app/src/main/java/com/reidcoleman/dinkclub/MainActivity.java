@@ -19,6 +19,7 @@ import android.webkit.WebViewClient;
 public class MainActivity extends Activity {
     private static final String URL = "https://reidwcoleman.github.io/dink-club/?tv=1";
     private WebView web;
+    private LanPads lan;
     private long lastBack = 0;
 
     @Override protected void onCreate(Bundle s) {
@@ -35,6 +36,10 @@ public class MainActivity extends Activity {
         ws.setUserAgentString(ws.getUserAgentString() + " DinkClubTV/1");
         web.setWebViewClient(new WebViewClient());
         web.setWebChromeClient(new WebChromeClient());
+        // phones on the Wi-Fi talk to the TV directly (the iPhone app, even locked)
+        lan = new LanPads(web);
+        web.addJavascriptInterface(lan, "DinkLan");
+        lan.start(this);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
         setContentView(web);
@@ -69,5 +74,5 @@ public class MainActivity extends Activity {
         return super.dispatchKeyEvent(e);
     }
 
-    @Override protected void onDestroy() { if (web != null) web.destroy(); super.onDestroy(); }
+    @Override protected void onDestroy() { if (lan != null) lan.stop(); if (web != null) web.destroy(); super.onDestroy(); }
 }

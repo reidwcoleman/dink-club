@@ -62,6 +62,7 @@ export class Lobby {
       if (ok) {
         this.code = code;
         this.status = 'ready';
+        this.openLan();
         this.onChange?.();
         setInterval(() => this.pingAll(), 1000);
         return;
@@ -91,7 +92,9 @@ export class Lobby {
 
   get joinUrl(): string {
     const u = new URL('pad.html', location.href);
-    u.search = `?room=${this.code}`;
+    // the TV app's own address too: the iPhone app talks to it directly (and keeps going locked)
+    const lan = lanBridge()?.address();
+    u.search = `?room=${this.code}` + (lan ? `&lan=${lan}` : '');
     u.hash = '';
     return u.toString();
   }
@@ -122,6 +125,27 @@ export class Lobby {
     if (!o || o.length < 2) return null;
     const best = [...o].sort((a, b) => a.rtt - b.rtt).slice(0, 3);
     return best.reduce((a, b) => a + b.off, 0) / best.length;
+  }
+
+  /**
+   * Phones on the Wi-Fi through the TV app (LanPads.java): every datagram arrives as
+   * window.__lan(from, msg); each sender becomes a connection like a WebRTC one, and goes quiet
+   * (closed) after 8 s without a word. Swings come twice (UDP may drop one): `sid` dedupes them.
+   */
+  private lanConns = new Map<string, LanConn>();
+  private openLan() {
+    const b = lanBridge();
+    if (!b) return;
+    b.advertise(this.code);
+    (window as unknown as Record<string, unknown>).__lan = (from: string, msg: PadMsg & { sid?: number }) => {
+      let c = this.lanConns.get(from);
+      if (!c || !c.open) {
+        c = new LanConn(from, b, () => this.lanConns.delete(from));
+        this.lanConns.set(from, c);
+        this.accept(c as unknown as DataConnection);
+      }
+      c.receive(msg);
+    };
   }
 
   send(slot: number, m: TvMsg) {
@@ -211,4 +235,47 @@ function clamp01(x: number) {
 /** a 3-vector from the wire, or null */
 function vec3(v: unknown): number[] | null {
   return Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x)) ? v.map((x) => Math.max(-30, Math.min(30, x))) : null;
+}
+
+interface LanBridge { send(to: string, json: string): void; address(): string; advertise(code: string): void }
+function lanBridge(): LanBridge | null {
+  return ((window as unknown as { DinkLan?: LanBridge }).DinkLan) ?? null;
+}
+
+/** a phone on the Wi-Fi, shaped like a PeerJS DataConnection for Lobby.accept */
+class LanConn {
+  open = true;
+  private handlers: Record<string, ((d?: unknown) => void)[]> = {};
+  private seen = new Set<number>();
+  private quiet = 0;
+  constructor(readonly peer: string, private bridge: LanBridge, private onGone: () => void) {
+    this.bump();
+  }
+  on(ev: string, fn: (d?: unknown) => void) {
+    (this.handlers[ev] ??= []).push(fn);
+  }
+  send(m: unknown) {
+    if (this.open) this.bridge.send(this.peer, JSON.stringify(m));
+  }
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    clearTimeout(this.quiet);
+    this.onGone();
+    for (const fn of this.handlers.close ?? []) fn();
+  }
+  receive(m: { sid?: number; t?: string }) {
+    this.bump();
+    if (typeof m.sid === 'number') {
+      if (this.seen.has(m.sid)) return;
+      this.seen.add(m.sid);
+      if (this.seen.size > 64) this.seen.delete(this.seen.values().next().value as number);
+    }
+    if (m.t === 'bye') { this.close(); return; }
+    for (const fn of this.handlers.data ?? []) fn(m);
+  }
+  private bump() {
+    clearTimeout(this.quiet);
+    this.quiet = window.setTimeout(() => this.close(), 8000);
+  }
 }

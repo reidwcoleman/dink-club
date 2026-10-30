@@ -2,17 +2,23 @@ import SwiftUI
 import WebKit
 import CoreMotion
 import simd
+import Network
 
-/// The paddle and nothing else: the phone's motion is the paddle. A hidden web view carries the
-/// link to the TV (WebRTC); this screen only shows whether the paddle is live and flashes on a swing.
+/// The paddle and nothing else: the phone's motion is the paddle. With the Dink Club TV app on the
+/// same Wi-Fi the phone talks to it directly (and keeps working locked or in the background);
+/// otherwise a hidden web view carries the link (WebRTC, foreground only). This screen only shows
+/// whether the paddle is live and flashes on a swing.
 struct PaddleView: View {
     let room: String
+    var lan: String? = nil
     let onLeave: () -> Void
     @StateObject private var link = PaddleLink()
 
     var body: some View {
         ZStack {
-            LinkWebView(room: room, link: link).opacity(0.01).allowsHitTesting(false)
+            if link.mode == .web {
+                LinkWebView(room: room, link: link).opacity(0.01).allowsHitTesting(false)
+            }
             Color(red: 0.06, green: 0.05, blue: 0.08).ignoresSafeArea()
             Circle()
                 .fill(link.live ? Color(red: 0.75, green: 0.95, blue: 0.2) : Color.white.opacity(0.12))
@@ -25,6 +31,10 @@ struct PaddleView: View {
                 Text(link.text)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.75))
+                if link.mode == .lan && link.live {
+                    Text("Works with the screen locked too")
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).padding(.top, 4)
+                }
                 if !link.trackOK {
                     Text("Camera tracking lost: keep the back camera uncovered, facing the room")
                         .font(.system(size: 13)).foregroundStyle(.orange.opacity(0.85))
@@ -45,12 +55,18 @@ struct PaddleView: View {
             }
         }
         .onChange(of: link.ended) { e in if e { onLeave() } }
-        .onDisappear { link.motion.stop(); link.tracker.stop(); link.stopTimers() }
+        .onAppear { link.begin(room: room, lan: lan) }
+        .onDisappear { link.finish() }
     }
 }
 
 /// what the hidden page reports back, and the motion + haptics it drives
 final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
+    enum Mode { case searching, lan, web }
+    @Published var mode: Mode = .searching
+    private var lanLink: LanLink?
+    private let finder = TVFinder()
+    private let keepAlive = KeepAlive()
     @Published var live = false
     @Published var pulse = false
     @Published var text = "Connecting…"
@@ -85,35 +101,104 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 if abs(n.z) > 0.2 { s = s.with(aim: max(-1.6, min(1.6, atan2(n.x, n.z) / (40 * .pi / 180)))) }
                 extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
             }
-            let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
-                            s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
-            self.web?.evaluateJavaScript(js)
+            if let lan = self.lanLink {
+                let pd = self.tracker.paddle(at: s.t)
+                lan.sendSwing(s, vel: pd?.vel, n: pd.map { $0.n.z < 0 ? -$0.n : $0.n })
+            } else {
+                let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
+                                s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
+                self.web?.evaluateJavaScript(js)
+            }
             self.pulse = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
         }
         tracker.onPos = { [weak self] x, z, vx, vz in
-            self?.web?.evaluateJavaScript(String(format: "window.__nativePos && window.__nativePos({x:%.4f,z:%.4f,vx:%.3f,vz:%.3f})", x, z, vx, vz))
+            guard let self else { return }
+            if let lan = self.lanLink { lan.sendPos(x: x, z: z, vx: vx, vz: vz) }
+            else { self.web?.evaluateJavaScript(String(format: "window.__nativePos && window.__nativePos({x:%.4f,z:%.4f,vx:%.3f,vz:%.3f})", x, z, vx, vz)) }
         }
     }
 
-    func stopTimers() { okTimer?.invalidate() }
+    /// the TV's address from its QR code, or look for it on the Wi-Fi; no TV app found → the web link
+    func begin(room: String, lan: String?) {
+        guard mode == .searching, lanLink == nil else { return }
+        text = "Looking for the TV…"
+        if let lan, let c = lan.lastIndex(of: ":"), let port = NWEndpoint.Port(String(lan[lan.index(after: c)...])) {
+            startLan(.hostPort(host: NWEndpoint.Host(String(lan[..<c])), port: port))
+            return
+        }
+        finder.find(code: room, timeout: 2.5) { [weak self] e in
+            guard let self else { return }
+            if let e { self.startLan(e) } else { self.mode = .web; self.text = "Connecting…" }
+        }
+    }
+
+    private func startLan(_ e: NWEndpoint) {
+        mode = .lan
+        text = "Connecting to the TV…"
+        var id = UserDefaults.standard.string(forKey: "padId") ?? ""
+        if id.isEmpty { id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "padId") }
+        let l = LanLink(endpoint: e, id: id, name: "Player")
+        lanLink = l
+        l.onState = { [weak self] st in
+            guard let self else { return }
+            switch st {
+            case .live: if !self.live { self.note.notificationOccurred(.success) }; self.live = true; self.text = "Paddle ready · swing away"
+            case .connecting: self.live = false; self.text = "Reconnecting…"
+            case .full: self.live = false; self.text = "Two paddles are already playing"
+            }
+        }
+        l.onMessage = { [weak self] m in self?.fromTV(m) }
+        l.start()
+        startSensing()
+        // keep running locked / in the background
+        keepAlive.start()
+    }
+
+    /// the TV's messages over the Wi-Fi link
+    private func fromTV(_ m: [String: Any]) {
+        switch m["t"] as? String {
+        case "hit":
+            if ((m["power"] as? Double) ?? 0) > 0.75 { hard.impactOccurred(intensity: 1) } else { hit.impactOccurred(intensity: 0.85) }
+            hit.prepare(); hard.prepare()
+        case "point":
+            if (m["won"] as? Bool) == true { note.notificationOccurred(.success) }
+        case "mode":
+            tracking = (m["move"] as? String) == "body" && RoomTracker.supported
+        default: break
+        }
+    }
+
+    private func startSensing() {
+        okTimer?.invalidate()
+        var bad = 0
+        okTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            // (the camera stops when the phone is locked; that's fine, the swings carry on)
+            bad = self.tracker.ok || UIApplication.shared.applicationState != .active ? 0 : bad + 1
+            let ok = !RoomTracker.supported || bad < 3
+            if ok != self.trackOK { self.trackOK = ok }
+        }
+        motion.start()
+        // the camera tracking reads every swing's path and face (and your steps in "you move")
+        tracker.start()
+        hit.prepare(); hard.prepare()
+    }
+
+    func finish() {
+        okTimer?.invalidate()
+        motion.stop()
+        tracker.stop()
+        lanLink?.stop()
+        lanLink = nil
+        keepAlive.stop()
+    }
 
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let m = message.body as? [String: Any], let t = m["t"] as? String else { return }
         switch t {
         case "start":
-            okTimer?.invalidate()
-            var bad = 0
-            okTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                bad = self.tracker.ok ? 0 : bad + 1
-                let ok = !RoomTracker.supported || bad < 3
-                if ok != self.trackOK { self.trackOK = ok }
-            }
-            motion.start()
-            // the camera tracking reads every swing's path and face (and your steps in "you move")
-            tracker.start()
-            hit.prepare(); hard.prepare()
+            startSensing()
         case "recenter":
             motion.recenter()
         case "track":
