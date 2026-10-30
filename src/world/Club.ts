@@ -47,8 +47,10 @@ export class Club {
   /** emissive materials that glow at dusk / night (bulbs, windows, fixtures) */
   private glow: { mat: THREE.MeshStandardMaterial; day: number; night: number }[] = [];
   private board: { ctx: CanvasRenderingContext2D; tex: THREE.CanvasTexture } | null = null;
-  private fronds: THREE.Mesh[] = [];
+  /** every frond of every palm in one instanced draw (pos, yaw, pitch, scale, phase per frond) */
+  private fronds: { mesh: THREE.InstancedMesh; data: { p: THREE.Vector3; yaw: number; pitch: number; s: number; ph: number }[] } | null = null;
   private t = 0;
+  private frame = 0;
   logo: THREE.Texture | null = null;
 
   constructor(readonly venue: Venue) {
@@ -69,6 +71,34 @@ export class Club {
     this.festoons();
     this.treeline();
     this.courtside();
+    this.bake();
+  }
+
+  /** static meshes that share a material become one mesh (draw calls are what a TV box's CPU runs out of) */
+  private bake() {
+    this.group.updateMatrixWorld(true);
+    const byMat = new Map<THREE.Material, THREE.Mesh[]>();
+    for (const o of [...this.group.children]) {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m as unknown as THREE.InstancedMesh).isInstancedMesh || Array.isArray(m.material) || m.children.length) continue;
+      const list = byMat.get(m.material as THREE.Material) ?? [];
+      list.push(m);
+      byMat.set(m.material as THREE.Material, list);
+    }
+    for (const [mat, list] of byMat) {
+      if (list.length < 2) continue;
+      const geos = list.map((m) => {
+        const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        return g.applyMatrix4(m.matrix);
+      });
+      const merged = new THREE.Mesh(mergeGeo(geos), mat);
+      merged.castShadow = list.some((m) => m.castShadow);
+      merged.receiveShadow = list.some((m) => m.receiveShadow);
+      merged.renderOrder = list[0].renderOrder;
+      for (const m of list) this.group.remove(m);
+      this.group.add(merged);
+    }
   }
 
   // ---------------------------------------------------------------------------------- ground
@@ -464,6 +494,8 @@ export class Club {
     };
     frondMat.customProgramCacheKey = () => 'frond-v1';
     const frondGeo = frondGeometry();
+    const trunks: THREE.BufferGeometry[] = [];
+    const fronds: { p: THREE.Vector3; yaw: number; pitch: number; s: number; ph: number }[] = [];
     const spots: [number, number][] = [];
     // behind the clubhouse and around the patio, down both sides, the far corners
     for (let k = 0; k < 9; k++) spots.push([-30 + k * 7.5 + (R() - 0.5) * 3, FENCE.zFar - 28 - R() * 6]);
@@ -491,28 +523,38 @@ export class Club {
         ua.setXY(i, ua.getY(i), u * h * 1.5);
       }
       tg.computeVertexNormals();
-      const trunk = new THREE.Mesh(tg, trunkMat);
-      trunk.castShadow = true;
-      this.group.add(trunk);
+      trunks.push(tg);
       const top = pts[8];
-      const crown = new THREE.Group();
-      crown.position.copy(top);
       const n = 14;
       for (let i = 0; i < n; i++) {
-        const f = new THREE.Mesh(frondGeo, frondMat);
         const yaw = (i / n) * Math.PI * 2 + R() * 0.4;
         const pitch = i % 2 ? 0.15 + R() * 0.3 : -0.25 - R() * 0.35;
-        f.rotation.set(0, yaw, pitch, 'YXZ');
-        const s = 2.2 + R() * 0.9;
-        f.scale.setScalar(s);
-        f.castShadow = true;
-        f.userData.base = pitch;
-        f.userData.phase = R() * 10;
-        crown.add(f);
-        this.fronds.push(f);
+        fronds.push({ p: top.clone(), yaw, pitch, s: 2.2 + R() * 0.9, ph: R() * 10 });
       }
-      this.group.add(crown);
     }
+    // one draw for all the trunks, one for all the fronds
+    const tm = new THREE.Mesh(mergeGeo(trunks), trunkMat);
+    tm.castShadow = true;
+    this.group.add(tm);
+    const im = new THREE.InstancedMesh(frondGeo, frondMat, fronds.length);
+    im.castShadow = true;
+    im.frustumCulled = false;
+    this.group.add(im);
+    this.fronds = { mesh: im, data: fronds };
+    this.swayFronds();
+  }
+
+  private swayFronds() {
+    const f = this.fronds;
+    if (!f) return;
+    const e = new THREE.Euler(0, 0, 0, 'YXZ'), q = new THREE.Quaternion(), m = new THREE.Matrix4(), sc = new THREE.Vector3();
+    f.data.forEach((d, i) => {
+      e.set(0, d.yaw, d.pitch + Math.sin(this.t * 1.3 + d.ph) * 0.035 + Math.sin(this.t * 0.37 + d.ph * 2) * 0.03);
+      q.setFromEuler(e);
+      m.compose(d.p, q, sc.setScalar(d.s));
+      f.mesh.setMatrixAt(i, m);
+    });
+    f.mesh.instanceMatrix.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------------------------- hedges
@@ -732,11 +774,8 @@ export class Club {
 
   update(dt: number) {
     this.t += dt;
-    // a breeze in the palms
-    for (const f of this.fronds) {
-      const b = f.userData.base as number, ph = f.userData.phase as number;
-      f.rotation.z = b + Math.sin(this.t * 1.3 + ph) * 0.035 + Math.sin(this.t * 0.37 + ph * 2) * 0.03;
-    }
+    // a breeze in the palms (every other frame is plenty)
+    if ((this.frame = (this.frame + 1) % 2) === 0) this.swayFronds();
   }
 }
 
