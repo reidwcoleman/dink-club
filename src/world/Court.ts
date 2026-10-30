@@ -37,7 +37,7 @@ export class Court {
     };
     this.uniforms = u;
     // (the TV gets the cheaper standard model: the court is most of the screen's pixels)
-    const m = (GFX.lite ? new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 }) : new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.6 })) as THREE.MeshPhysicalMaterial;
+    const m = (GFX.lite ? new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 }) : new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, specularIntensity: 0.75, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0.8, 0.85, 1.0) })) as THREE.MeshPhysicalMaterial;
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
       sh.vertexShader = sh.vertexShader
@@ -177,7 +177,7 @@ vec3 courtSurface( vec2 p, float lines, vec3 viewW, out float rough, out vec3 nW
     c *= 1.0 - 0.3 * scuff - 0.5 * mk.b;
     vec3 lc = uLine * ( 0.96 + 0.04 * nz3.g ) * ( 1.0 - 0.15 * scuff );
     c = mix( c, lc, lines );
-    rough = mix( 0.58, 0.44, lines ) + 0.06 * ( nz2.b - 0.5 ) - 0.12 * scuff;
+    rough = mix( 0.5, 0.4, lines ) + 0.06 * ( nz2.b - 0.5 ) + 0.1 * scuff;
     nW = grainNormal( p, 1.6, mix( 0.22, 0.1, lines ) );
   } else if ( uSurface < 1.5 ) {
     // ---- clay: crushed brick

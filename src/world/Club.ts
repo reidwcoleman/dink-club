@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GFX } from '../render/gfx.ts';
 import { HW, FLOOR_HX, FLOOR_HZ, POST_X, NET_POST } from '../sim/dims.ts';
 import { lin, rng, noiseTexture } from '../render/noise.ts';
@@ -71,6 +72,7 @@ export class Club {
     this.hedges();
     this.festoons();
     this.treeline();
+    this.copses();
     this.courtside();
     this.bake();
   }
@@ -368,9 +370,22 @@ export class Club {
   // ---------------------------------------------------------------------------------- clubhouse
   private clubhouse(logo: THREE.Texture) {
     const z = FENCE.zFar - 15.5;
-    const stucco = new THREE.MeshStandardMaterial({ color: lin('#e4cfb2'), roughness: 0.92 });
+    const stucco = worldPattern(new THREE.MeshStandardMaterial({ color: lin('#e4cfb2'), roughness: 0.92 }), 'stucco', /* glsl */ `
+      vec4 a = texture2D( uNoise, vGW.xy * vec2( 0.09, 0.12 ) + vGW.z * 0.05 );
+      vec4 b = texture2D( uNoise, vGW.xy * 1.7 + vGW.zx * 1.3 );
+      float grime = smoothstep( 1.4, 0.0, vGW.y ) * 0.22 + smoothstep( 0.55, 0.85, a.r ) * 0.08;
+      diffuseColor.rgb *= ( 0.94 + 0.1 * a.g ) * ( 0.95 + 0.08 * b.b ) * ( 1.0 - grime );`);
     const trim = new THREE.MeshStandardMaterial({ color: lin('#2b4a5e'), roughness: 0.6 });
-    const roofM = new THREE.MeshStandardMaterial({ color: lin('#b8643f'), roughness: 0.75 });
+    // terracotta: courses of barrel tiles down the slope, each tile shaded round, the odd one off-colour
+    const roofM = worldPattern(new THREE.MeshStandardMaterial({ color: lin('#b8643f'), roughness: 0.75 }), 'tiles', /* glsl */ `
+      vec2 tp = vec2( ( vGW.x + vGW.z ) / 0.26, vGW.y / 0.11 );
+      float row = floor( tp.y );
+      float fx = fract( tp.x + 0.5 * mod( row, 2.0 ) );
+      float fy = fract( tp.y );
+      float barrel = sin( fx * 3.14159 );
+      vec4 tn = texture2D( uNoise, vec2( floor( tp.x ) * 0.071, row * 0.113 ) );
+      diffuseColor.rgb *= ( 0.55 + 0.5 * barrel ) * ( 0.75 + 0.3 * smoothstep( 0.0, 0.25, fy ) ) * ( 0.85 + 0.3 * tn.r );
+      diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.8, 0.75, 0.7 ), step( 0.8, tn.g ) * 0.6 );`);
     const wood = new THREE.MeshStandardMaterial({ color: lin('#8a5a36'), roughness: 0.7 });
     const W = 24, H = 7.6, D = 9;
     const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), stucco);
@@ -382,8 +397,10 @@ export class Club {
     roof.position.set(0, H, z - D / 2);
     roof.castShadow = true;
     this.group.add(roof);
-    // windows: warm interiors (emissive), framed
-    const win = new THREE.MeshStandardMaterial({ color: lin('#2a2f36'), emissive: lin('#ffb867'), emissiveIntensity: 0.4, roughness: 0.08, metalness: 0.2 });
+    // windows: glass over a lit room (a painted interior: ceiling lights, a counter, chairs,
+    // people), the panes split by mullions; the glass reflects the sky
+    const room = interiorTexture();
+    const win = new THREE.MeshStandardMaterial({ color: lin('#9aa3ab'), map: room, emissive: 0xffffff, emissiveMap: room, emissiveIntensity: 0.4, roughness: 0.06, metalness: 0.35, envMapIntensity: 1.4 });
     this.glow.push({ mat: win, day: 0.25, night: 2.2 });
     const wins: THREE.BufferGeometry[] = [], frames: THREE.BufferGeometry[] = [];
     for (let k = 0; k < 7; k++) {
@@ -633,10 +650,11 @@ export class Club {
   private treeline() {
     // a cylinder band far out whose top edge is cut per pixel: rounded canopies with palms poking
     // above them, darker at the base and hazed toward the sky colour with distance
-    const g = new THREE.CylinderGeometry(170, 170, 40, 256, 1, true);
-    g.translate(0, 19, 0);
+    // two rings: the woods round the club at 90 m, and a line of hazy hills far behind them
+    const g = new THREE.CylinderGeometry(90, 90, 26, 256, 1, true);
+    g.translate(0, 12, 0);
     this.treeMat = new THREE.ShaderMaterial({
-      uniforms: { uCol: { value: lin('#2a3d33') }, uHaze: { value: lin('#c9a98d') }, uHazeK: { value: 0.35 }, uNoise: { value: noiseTexture() } },
+      uniforms: { uCol: { value: lin('#2a3d33') }, uHaze: { value: lin('#c9a98d') }, uHazeK: { value: 0.35 }, uNoise: { value: noiseTexture() }, uHills: { value: 0 }, uScale: { value: 0.6 } },
       side: THREE.BackSide,
       fog: false,
       defines: GFX.lite ? { LITE: 1 } : {},
@@ -644,18 +662,34 @@ export class Club {
         varying vec3 vP;
         void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`,
       fragmentShader: /* glsl */ `
-        uniform vec3 uCol, uHaze; uniform float uHazeK; uniform sampler2D uNoise;
+        uniform vec3 uCol, uHaze; uniform float uHazeK, uHills, uScale; uniform sampler2D uNoise;
         varying vec3 vP;
         float n1( float x ) { return texture2D( uNoise, vec2( x, 0.37 ) ).r; }
         void main() {
           float a = atan( vP.z, vP.x ) / 6.2831853 + 0.5;
           // canopy line: broad hills of trees + bumpy crowns + a few tall palms
           float h = 7.0 + 9.0 * n1( a * 3.0 ) + 4.0 * n1( a * 23.0 );
+          if ( uHills > 0.5 ) {
+            // long soft ridges, fading into the sky
+            h = 14.0 + 30.0 * n1( a * 2.0 + 0.61 ) + 9.0 * n1( a * 9.0 + 0.2 );
+            if ( vP.y > h ) discard;
+            float th = clamp( vP.y / h, 0.0, 1.0 );
+            vec3 hc = mix( uCol * 1.6, uHaze, 0.72 + 0.12 * th );
+            gl_FragColor = vec4( hc, 1.0 );
+            #include <colorspace_fragment>
+            return;
+          }
+          h *= uScale * 1.35;
           #ifndef LITE
-          h += 1.6 * n1( a * 140.0 );
-          float palm = smoothstep( 0.78, 0.86, n1( a * 61.0 + 0.3 ) );
+          // crowns: rounded bumps of single trees along the top
+          float ca = a * 300.0 + 2.5 * n1( a * 41.0 );
+          float cr = fract( ca );
+          float ci = floor( ca );
+          float cw = 0.55 + 0.45 * n1( ci * 0.0137 + 0.21 );
+          h += ( 0.8 + 2.4 * n1( ci * 0.0291 + 0.5 ) ) * sqrt( max( 0.0, 1.0 - pow( ( cr * 2.0 - 1.0 ) / cw, 2.0 ) ) );
+          float palm = smoothstep( 0.76, 0.86, n1( a * 61.0 + 0.3 ) );
           float crown = 1.0 - smoothstep( 0.0, 0.006, abs( fract( a * 61.0 * 9.0 ) - 0.5 ) * 0.04 );
-          h += palm * ( 8.0 + 6.0 * n1( a * 400.0 ) ) * ( 0.35 + 0.65 * crown );
+          h += palm * ( 6.0 + 4.0 * n1( a * 400.0 ) ) * ( 0.35 + 0.65 * crown );
           #endif
           if ( vP.y > h ) discard;
           float t = clamp( vP.y / max( h, 1.0 ), 0.0, 1.0 );
@@ -663,6 +697,8 @@ export class Club {
           vec3 c = uCol * ( 0.65 + 0.5 * t );
           #else
           vec3 c = uCol * ( 0.65 + 0.5 * t ) * ( 0.85 + 0.3 * texture2D( uNoise, vec2( a * 90.0, vP.y * 0.05 ) ).g );
+          // each crown: lit on one side, in shade on the other
+          c *= 0.85 + 0.35 * cr * t;
           #endif
           c = mix( c, uHaze, uHazeK * ( 1.0 - 0.6 * t ) );
           gl_FragColor = vec4( c, 1.0 );
@@ -674,8 +710,64 @@ export class Club {
     // after the opaque club: whatever stands in front of it is never shaded
     m.renderOrder = 1;
     this.group.add(m);
+    this.hillMat = this.treeMat.clone() as unknown as THREE.ShaderMaterial;
+    this.hillMat.uniforms.uHills.value = 1;
+    const hg = new THREE.CylinderGeometry(300, 300, 80, 128, 1, true);
+    hg.translate(0, 38, 0);
+    const hills = new THREE.Mesh(hg, this.hillMat);
+    hills.name = 'hills';
+    hills.renderOrder = 2;
+    this.group.add(hills);
   }
+  /** clumps of trees and shrubs out on the grass between the club and the woods */
+  private copses() {
+    const R = rng(31);
+    const geo = mergeVertices(new THREE.IcosahedronGeometry(1, GFX.lite ? 1 : 2).deleteAttribute('normal').deleteAttribute('uv'));
+    // lumpy: push the vertices in and out a little
+    const pa = geo.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < pa.count; i++) {
+      const v = new THREE.Vector3().fromBufferAttribute(pa, i);
+      const k = 1 + 0.18 * Math.sin(v.x * 5.1 + v.y * 3.7) * Math.cos(v.z * 4.3 - v.y * 2.1);
+      pa.setXYZ(i, v.x * k, v.y * k * 0.85, v.z * k);
+    }
+    geo.computeVertexNormals();
+    // leaf clumps: light and dark masses across each crown, darker deep inside
+    const leaf = worldPattern(new THREE.MeshStandardMaterial({ color: lin('#3d5a2e'), roughness: 0.9 }), 'leaf', /* glsl */ `
+      vec4 la = texture2D( uNoise, vGW.xz * 0.33 + vGW.y * 0.21 );
+      vec4 lb = texture2D( uNoise, vGW.xy * 1.3 + vGW.zy * 0.9 );
+      diffuseColor.rgb *= ( 0.55 + 0.7 * smoothstep( 0.25, 0.75, la.g ) ) * ( 0.78 + 0.44 * lb.r );`);
+    const N = GFX.lite ? 70 : 150;
+    const im = new THREE.InstancedMesh(geo, leaf, N);
+    const trunkG = new THREE.CylinderGeometry(0.14, 0.22, 1, 6);
+    const trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshStandardMaterial({ color: lin('#4a3626'), roughness: 0.9 }), N);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color();
+    let n = 0;
+    for (let tries = 0; n < N && tries < N * 20; tries++) {
+      const ang = R() * Math.PI * 2, r = 36 + R() * 50;
+      const x = Math.cos(ang) * r, z = Math.sin(ang) * r;
+      // keep the club and the near grounds clear
+      if (Math.abs(x) < FENCE.x + 8 && z > FENCE.zFar - 34 && z < FENCE.zNear + 10) continue;
+      // clumps: most trees stand near another
+      const tree = R() < 0.6;
+      const sz = tree ? 2.4 + R() * 2.8 : 0.9 + R() * 1.2;
+      const lift = tree ? 2.2 + R() * 3.5 : 0.3;
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28);
+      m.compose(new THREE.Vector3(x, lift + sz * 0.6, z), q, new THREE.Vector3(sz * (0.9 + R() * 0.3), sz * (0.8 + R() * 0.4), sz * (0.9 + R() * 0.3)));
+      im.setMatrixAt(n, m);
+      im.setColorAt(n, col.setRGB(0.75 + R() * 0.4, 0.85 + R() * 0.35, 0.6 + R() * 0.3));
+      m.compose(new THREE.Vector3(x, (lift + sz * 0.3) / 2, z), q, new THREE.Vector3(tree ? 1 : 0.01, lift + sz * 0.3, tree ? 1 : 0.01));
+      trunks.setMatrixAt(n, m);
+      n++;
+    }
+    im.count = trunks.count = n;
+    im.castShadow = false;
+    im.receiveShadow = false;
+    this.group.add(im, trunks);
+  }
+
   private treeMat!: THREE.MeshBasicMaterial;
+
+  private hillMat!: THREE.ShaderMaterial;
   private get treeU() { return (this.treeMat as unknown as THREE.ShaderMaterial).uniforms; }
 
   // ---------------------------------------------------------------------------------- courtside
@@ -777,9 +869,12 @@ export class Club {
     // the tree line reads as a dark silhouette against the sky, lighter in the day haze
     const u = this.treeU;
     const inv = 1 / Math.max(0.3, exposure);
-    (u.uCol.value as THREE.Color).copy(lin(k > 0.8 ? '#0a120e' : k > 0.3 ? '#1f2e27' : '#36503f')).multiplyScalar(inv);
+    (u.uCol.value as THREE.Color).copy(lin(k > 0.8 ? '#0a120e' : k > 0.3 ? '#22382a' : '#36503f')).multiplyScalar(inv);
     (u.uHaze.value as THREE.Color).copy(lin(k > 0.8 ? '#141a26' : k > 0.3 ? '#d7a98a' : '#a9bccb')).multiplyScalar(inv * 0.8);
-    u.uHazeK.value = k > 0.8 ? 0.15 : 0.4;
+    u.uHazeK.value = k > 0.8 ? 0.15 : 0.26;
+    const hu = this.hillMat.uniforms;
+    (hu.uCol.value as THREE.Color).copy(u.uCol.value as THREE.Color);
+    (hu.uHaze.value as THREE.Color).copy(u.uHaze.value as THREE.Color).multiplyScalar(1.12);
   }
 
   update(dt: number) {
@@ -909,4 +1004,80 @@ export function mergeGeo(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   out.setIndex(base > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
   return out;
+}
+
+/** the clubhouse's rooms seen through the glass: warm walls, ceiling lights, a counter, chairs, a few people, mullions */
+function interiorTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 192;
+  const g = c.getContext('2d')!;
+  const R = rng(11);
+  // back wall and floor, lit from above
+  const wall = g.createLinearGradient(0, 0, 0, 192);
+  wall.addColorStop(0, '#f3c98a');
+  wall.addColorStop(0.55, '#c98d55');
+  wall.addColorStop(0.56, '#6b4a33');
+  wall.addColorStop(1, '#3a281c');
+  g.fillStyle = wall;
+  g.fillRect(0, 0, 256, 192);
+  // ceiling lights
+  for (let x = 20; x < 256; x += 56) {
+    const l = g.createRadialGradient(x + 12, 10, 1, x + 12, 10, 40);
+    l.addColorStop(0, 'rgba(255,240,200,0.95)');
+    l.addColorStop(1, 'rgba(255,220,160,0)');
+    g.fillStyle = l;
+    g.fillRect(x - 30, 0, 84, 60);
+    g.fillStyle = '#fff6dc';
+    g.fillRect(x, 6, 24, 4);
+  }
+  // shelves / framed pictures on the wall
+  for (let x = 8; x < 250; x += 40 + R() * 30) {
+    g.fillStyle = `hsl(${Math.floor(R() * 360)},35%,${30 + R() * 25}%)`;
+    g.fillRect(x, 40 + R() * 20, 16 + R() * 14, 14 + R() * 10);
+  }
+  // a counter, chairs and people (silhouettes)
+  g.fillStyle = '#4a3020';
+  g.fillRect(150, 112, 96, 30);
+  for (let k = 0; k < 7; k++) {
+    const x = 10 + R() * 230, h = 46 + R() * 18;
+    g.fillStyle = `hsl(${Math.floor(R() * 360)},30%,${18 + R() * 22}%)`;
+    g.fillRect(x, 140 - h + 14, 14, h);
+    g.beginPath();
+    g.arc(x + 7, 140 - h + 6, 7, 0, Math.PI * 2);
+    g.fillStyle = '#5a3c2c';
+    g.fill();
+  }
+  for (let x = 6; x < 250; x += 34) {
+    g.fillStyle = '#2b1d14';
+    g.fillRect(x, 136, 18, 4);
+    g.fillRect(x + 2, 140, 3, 18);
+    g.fillRect(x + 13, 140, 3, 18);
+  }
+  // mullions and the frame
+  g.fillStyle = '#1d2a33';
+  g.fillRect(0, 0, 256, 7);
+  g.fillRect(0, 185, 256, 7);
+  g.fillRect(0, 0, 7, 192);
+  g.fillRect(249, 0, 7, 192);
+  g.fillRect(125, 0, 6, 192);
+  g.fillRect(0, 74, 256, 4);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** a material with a pattern painted from world position (fragment GLSL: vGW, uNoise, diffuseColor) */
+function worldPattern<T extends THREE.MeshStandardMaterial>(m: T, key: string, glsl: string): T {
+  const nz = noiseTexture();
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uNoise = { value: nz };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvec4 gwp = vec4( transformed, 1.0 );\n#ifdef USE_INSTANCING\ngwp = instanceMatrix * gwp;\n#endif\nvGW = ( modelMatrix * gwp ).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vGW;\nuniform sampler2D uNoise;')
+      .replace('#include <map_fragment>', '#include <map_fragment>\n' + glsl);
+  };
+  m.customProgramCacheKey = () => 'wp-' + key;
+  return m;
 }
