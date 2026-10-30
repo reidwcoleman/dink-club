@@ -176,6 +176,8 @@ export class Renderer {
    * mapping and exposure; a fixed, lower render scale
    */
   lite = false;
+  /** the scene drawn in lite mode (the post chain keeps its own reference) */
+  liveScene: THREE.Scene | null = null;
   setLite(on: boolean) {
     this.lite = on;
     const gl = this.gl;
@@ -188,7 +190,7 @@ export class Renderer {
     this.gl.info.reset();
     if (this.lite) {
       this.gl.toneMappingExposure = this.exposure.value;
-      this.gl.render(this.renderPass.mainScene, this.camera);
+      this.gl.render(this.liveScene ?? this.scene, this.camera);
       return;
     }
     this.composer.render(dt);

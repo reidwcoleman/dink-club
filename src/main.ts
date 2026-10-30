@@ -25,6 +25,7 @@ GFX.lite = onTV || params.get('lite') === '1';
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
+renderer.liveScene = world.scene;
 renderer.composer.passes.forEach((p) => ((p as unknown as { mainScene: THREE.Scene }).mainScene = world.scene));
 // on the TV app (an Android TV box's GPU) start lighter; the renderer adapts its resolution from there
 renderer.setQuality((params.get('q') as Quality) ?? (onTV ? 'low' : 'high'));
