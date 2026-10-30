@@ -114,6 +114,8 @@ export class Game {
   waitHit: { idx: number; until: number } | null = null;
   /** each human's usual delay from the ball reaching their paddle (as the game runs it) to their swing landing here, learned as they play */
   lag = [0.13, 0.13];
+  /** each player's usual face tilt at contact (forehand, backhand), from the phone */
+  private faceBase = [[NaN, NaN], [NaN, NaN]];
   replay!: Replay;
   private highlight = false;
   onMatchOver: ((m: Match) => void) | null = null;
@@ -814,6 +816,25 @@ export class Game {
         spec = { speed: 8.5 + 5 * pw, rpm: 500, clear: Math.abs(opp.pos.z) < NVZ + 1.5 ? 0.16 : 0.3 };
     }
     if (plan.volley && type === 'reset') { depth = 3.8 + Math.random() * 2; spec = { speed: 8 + 6 * pw, rpm: -300, clear: 0.12 }; }
+    if (p.human) {
+      // how hard you swing sets how deep it goes within the shot (no dice): a soft dink drops just
+      // over, a firmer one lands at the kitchen line; a full drive goes to the baseline
+      const band = type === 'dink' || type === 'drop' ? [0, 0.3] : type === 'reset' ? [0.3, 0.66] : type === 'drive' ? [0.66, 1] : null;
+      if (band) {
+        const u = THREE.MathUtils.clamp((power - band[0]) / (band[1] - band[0]), 0, 1);
+        depth = type === 'dink' ? 0.6 + u * 1.3 : type === 'drop' ? 0.8 + u * 1.5 : plan.volley ? 3.2 + u * 3 : HL - 2.6 + u * 1.9;
+      }
+      // the face: opened past how you usually hold it, the ball goes up and long; closed, flat and
+      // short. Learned per player and per side (the phone sits differently in every hand)
+      const fn = this.committed[p.index]?.swing.n;
+      if (fn && type !== 'smash' && type !== 'lob') {
+        const k = plan.forehand ? 0 : 1, base = this.faceBase[p.index][k];
+        const d = Number.isNaN(base) ? 0 : THREE.MathUtils.clamp(fn[1] - base, -0.45, 0.45);
+        this.faceBase[p.index][k] = Number.isNaN(base) ? fn[1] : base * 0.85 + fn[1] * 0.15;
+        spec.clear = Math.max(0.05, (spec.clear ?? 0.2) + d * 1.4);
+        depth = Math.max(0.5, depth + d * 1.6);
+      }
+    }
     // a soft shot off a hard ball: the paddle face gives it back with interest unless it's taken off
     const soft = type === 'dink' || type === 'drop' || type === 'reset';
     const absorb = soft ? THREE.MathUtils.clamp((inSpeed - 10) / 14, 0, 1) : 0;

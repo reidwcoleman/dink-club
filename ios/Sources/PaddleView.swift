@@ -277,15 +277,17 @@ struct Swing {
  y up, z toward the TV — "toward the TV" is where the back camera pointed when the paddle started:
  you were looking at the screen, facing the TV):
 
- - a swing starts when the turning rate passes 230°/s and ends just after its peak; the peak time
-   is refined with a parabola through the neighbouring samples
+ - a swing starts when the turning rate passes 230°/s, or (a dink, a block) when the paddle head
+   pushes toward the net at over 1.1 m/s while turning a little; it ends just after the peak of
+   turn rate + head speed, the peak time refined with a parabola through the neighbouring samples
  - the paddle's velocity at the peak: the hand's (the user acceleration integrated through the
    swing, leaking away between swings) plus the paddle head's turn about the hand (ω × r, the head
    ~16 cm beyond the phone's centre along its long edge). Its direction is the swing path — up
    or down across the face is topspin or slice, across it sideways is sidespin (curves)
  - the face: the screen's normal in the room (the back of the phone on a backhand), so its tilt
    (open / closed) and where it points (aim) are absolute, not a drifting integral
- - power from the peak turning rate, blended with the paddle speed
+ - power from the paddle head's speed against this player's own full swing (learned), with the
+   peak turning rate
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
@@ -293,7 +295,9 @@ final class SwingDetector {
     private let queue = OperationQueue()
     private var swinging = false
     private var cool: TimeInterval = 0
-    private struct S { let t: TimeInterval; let g: Double; let v: SIMD3<Double>; let h: SIMD3<Double>; let n: SIMD3<Double> }
+    private struct S { let t: TimeInterval; let g: Double; let e: Double; let v: SIMD3<Double>; let h: SIMD3<Double>; let n: SIMD3<Double> }
+    /// this player's full-swing paddle-head speed (m/s), learned from their hard swings
+    private var fullSpeed = 6.5
     private var samples: [S] = []
     private var vHand = SIMD3<Double>(0, 0, 0)
     private var last: TimeInterval = 0
@@ -353,36 +357,46 @@ final class SwingDetector {
         if g > 140 { lastFast = t }
         // the hand: user acceleration integrated, leaking away between swings (it only has to hold a swing)
         let a = room(SIMD3(m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z) * 9.81)
-        vHand = vHand * exp(-dt / (swinging ? 0.6 : 0.15)) + a * dt
-        if !swinging {
-            samples.removeAll(keepingCapacity: true)
-            if g > start0 && t > cool { swinging = true } else { return }
-        }
+        vHand = vHand * exp(-dt / (swinging ? 0.6 : 0.2)) + a * dt
         // the paddle head turning about the hand
         let tip = room(simd_cross(w, SIMD3(0, 0.16, 0)))
-        samples.append(S(t: t, g: g, v: vHand + tip, h: vHand, n: room(SIMD3(0, 0, 1))))
+        let vHead = vHand + tip, spNow = simd_length(vHead)
+        if !swinging {
+            samples.removeAll(keepingCapacity: true)
+            // a full swing turns the phone fast; a dink or a block barely turns it but pushes the
+            // paddle toward the net
+            let soft = g > 60 && spNow > 1.1 && vHead.z > 0.7
+            if (g > start0 || soft) && t > cool { swinging = true } else { return }
+        }
+        // how much swing there is: turn rate and head speed together, so soft pushes peak too
+        let e = g / 500 + spNow / 4
+        samples.append(S(t: t, g: g, e: e, v: vHead, h: vHand, n: room(SIMD3(0, 0, 1))))
         let n = samples.count
         var k = 0
-        for i in 1..<n where samples[i].g > samples[k].g { k = i }
-        guard n - 1 > k, g < samples[k].g * 0.8 || t - samples[k].t > 0.06 || n > 45 else { return }
+        for i in 1..<n where samples[i].e > samples[k].e { k = i }
+        guard n - 1 > k, e < samples[k].e * 0.8 || t - samples[k].t > 0.05 || n > 45 else { return }
         swinging = false
         cool = t + 0.3
-        var tPeak = samples[k].t, gPeak = samples[k].g
+        var tPeak = samples[k].t
         if k > 0 && k < n - 1 {
-            let y0 = samples[k - 1].g, y1 = samples[k].g, y2 = samples[k + 1].g
+            let y0 = samples[k - 1].e, y1 = samples[k].e, y2 = samples[k + 1].e
             let den = y0 - 2 * y1 + y2
             if den < 0 {
                 let off = max(-0.5, min(0.5, 0.5 * (y0 - y2) / den))
                 tPeak += off * (samples[k + 1].t - samples[k - 1].t) / 2
-                gPeak = y1 - 0.25 * (y0 - y2) * off
             }
         }
+        let gPeak = samples.reduce(0) { max($0, $1.g) }
         let pk = samples[k]
         let v = pk.v, sp = simd_length(v)
         // the hitting face points at the TV (the back of the phone on a backhand)
         let nf = pk.n.z < 0 ? -pk.n : pk.n
         let gyroPower = max(0, min(1, (gPeak - start0) / 1350))
-        let s = Swing(power: min(1, gyroPower * 0.65 + max(0, min(1, (sp - 1) / 8)) * 0.35),
+        // head speed against this player's own full swing (learned: big swingers and small
+        // swingers both reach a drive)
+        let speedPower = max(0, min(1, (sp - 0.6) / (fullSpeed - 0.6)))
+        if sp > fullSpeed * 0.75 && sp < 25 { fullSpeed = max(4, min(14, fullSpeed * 0.85 + sp * 0.15)) }
+        let s = Swing(power: min(1, gyroPower * 0.4 + speedPower * 0.6),
                       lift: sp > 0.5 ? max(-1, min(1, v.y / sp * 1.8)) : 0,
                       face: pk.n.y,
                       aim: abs(nf.z) > 0.2 ? max(-1.6, min(1.6, atan2(nf.x, nf.z) / (40 * .pi / 180))) : nil,

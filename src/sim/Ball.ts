@@ -5,7 +5,8 @@ import { BALL_R, BALL_M, netTop, POST_X, SURFACE_PHYS, type Surface } from './di
  *  - gravity, quadratic drag (Cd 0.45: the holes make a light plastic ball slow down fast)
  *  - Magnus lift from spin, C_L = 1 / (2 + v / (r·ω)) (Watts & Ferrer), a fifth weaker for a holed
  *    shell (slow-motion sidespin drives bend ~0.5 m)
- *  - spin decay (τ ≈ 3 s)
+ *  - drag rising with spin (Cd + 0.25·rω/v, as measured for spinning balls)
+ *  - spin decay from air torque, faster at speed (τ ≈ 2.5 s on a drive, ~4 s on a dink)
  *  - bounce: vertical restitution per surface; tangential friction impulse that either slides
  *    the whole contact (μ(1+e)|vy|) or grips and rolls out (thin shell, I = ⅔mr²)
  *  - the net: a cord that sags from 36 in at the posts to 34 in in the middle, bound in a soft 2 in
@@ -23,7 +24,6 @@ export const CD = 0.45;
 export const KD = (0.5 * RHO * CD * A) / BALL_M; // drag: a = −KD |v| v
 export const KL = (0.5 * RHO * A * 0.8) / BALL_M; // lift: a = KL · C_L · |v|² (ŵ×v̂)
 const G = 9.81;
-export const SPIN_TAU = 3;
 /** the net's tape: radius of its padded top, and its restitution */
 const TAPE_R = 0.016;
 const TAPE_E = 0.22;
@@ -74,7 +74,7 @@ export class BallSim {
     p.x += v.x * h;
     p.y += v.y * h;
     p.z += v.z * h;
-    const k = Math.exp(-h / SPIN_TAU);
+    const k = spinKeep(Math.hypot(v.x, v.y, v.z), h);
     w.x *= k; w.y *= k; w.z *= k;
     this.t += h;
     // the tape: a padded cylinder along the top of the net
@@ -159,12 +159,21 @@ export class BallSim {
 }
 
 const _a = v3();
-function accel(v: V3, w: V3): V3 {
+/** drag grows with spin (the spinning shell drags more air): Cd + 0.25·S, S = rω / v */
+export function dragK(s: number, ws: number): number {
+  return KD * (1 + (0.25 / CD) * Math.min(0.5, (BALL_R * ws) / Math.max(1, s)));
+}
+/** spin decay over h seconds: air torque on the holed shell, faster when it flies faster */
+export function spinKeep(s: number, h: number): number {
+  return Math.exp(-h * (0.12 + 0.018 * s));
+}
+export function accel(v: V3, w: V3): V3 {
   const s = Math.hypot(v.x, v.y, v.z);
-  _a.x = -KD * s * v.x;
-  _a.y = -KD * s * v.y - G;
-  _a.z = -KD * s * v.z;
   const ws = Math.hypot(w.x, w.y, w.z);
+  const kd = dragK(s, ws);
+  _a.x = -kd * s * v.x;
+  _a.y = -kd * s * v.y - G;
+  _a.z = -kd * s * v.z;
   if (ws > 1e-3 && s > 1e-3) {
     // ŵ × v̂ scaled by C_L |v|²
     const cl = 1 / (2 + s / (BALL_R * ws));

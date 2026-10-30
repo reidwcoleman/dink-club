@@ -1,5 +1,5 @@
 import { BALL_R, netTop, type Surface } from './dims.ts';
-import { spinFor, KD, KL, SPIN_TAU, type V3, v3 } from './Ball.ts';
+import { spinFor, KL, dragK, spinKeep, type V3, v3 } from './Ball.ts';
 
 /**
  * The shot solver: which launch velocity lands a ball struck at p0 with this pace and spin
@@ -39,12 +39,12 @@ export function flyToGround(p0: V3, v0: V3, w0: V3, dt = 1 / 240, tMax = 5): { x
   const wx = w0.x, wy = w0.y, wz = w0.z;
   let netY = Infinity, netX = 0;
   let t = 0;
-  const decay = Math.exp(-dt / SPIN_TAU);
   let sx = wx, sy = wy, sz = wz;
   while (t < tMax) {
     const s = Math.hypot(vx, vy, vz);
-    let ax = -KD * s * vx, ay = -KD * s * vy - 9.81, az = -KD * s * vz;
     const ws = Math.hypot(sx, sy, sz);
+    const kd = dragK(s, ws);
+    let ax = -kd * s * vx, ay = -kd * s * vy - 9.81, az = -kd * s * vz;
     if (ws > 1e-3) {
       const cl = 1 / (2 + s / (BALL_R * ws));
       let cx = sy * vz - sz * vy, cy = sz * vx - sx * vz, cz = sx * vy - sy * vx;
@@ -57,6 +57,7 @@ export function flyToGround(p0: V3, v0: V3, w0: V3, dt = 1 / 240, tMax = 5): { x
     vx += ax * dt; vy += ay * dt; vz += az * dt;
     const opz = pz, opy = py, opx = px;
     px += vx * dt; py += vy * dt; pz += vz * dt;
+    const decay = spinKeep(s, dt);
     sx *= decay; sy *= decay; sz *= decay;
     t += dt;
     if ((opz > 0) !== (pz > 0)) {
