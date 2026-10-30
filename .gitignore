@@ -1,0 +1,9 @@
+node_modules
+dist
+shots
+.DS_Store
+.scratch
+# downloaded source packs (Rocketbox FBX/TGA, Poly Haven originals) — see tools/fetch_assets.py
+assets-src/
+assets-gen/*
+!assets-gen/gen.sh
