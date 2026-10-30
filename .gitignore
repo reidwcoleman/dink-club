@@ -7,3 +7,5 @@ shots
 assets-src/
 assets-gen/*
 !assets-gen/gen.sh
+ios/DinkPaddle.xcodeproj/
+ios/build/

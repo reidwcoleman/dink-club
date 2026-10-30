@@ -22,8 +22,14 @@ const store = (k: string, v?: string) => {
 };
 const myId = store('dink-id') ?? Math.random().toString(36).slice(2, 10);
 store('dink-id', myId);
-let name = store('dink-name') ?? '';
-let paddle = +(store('dink-paddle') ?? 0) % PADDLES.length;
+// inside the Dink Club iPhone app: the app reads the motion sensors natively and drives the haptics
+type NativeBridge = { postMessage: (m: unknown) => void };
+const native: NativeBridge | null = params.get('native') === '1' ? ((window as unknown as { webkit?: { messageHandlers?: { dink?: NativeBridge } } }).webkit?.messageHandlers?.dink ?? null) : null;
+function toNative(m: Record<string, unknown>) {
+  try { native?.postMessage(m); } catch { /* not in the app */ }
+}
+let name = params.get('name') ?? store('dink-name') ?? '';
+let paddle = +(params.get('paddle') ?? store('dink-paddle') ?? 0) % PADDLES.length;
 
 let conn: DataConnection | null = null;
 let peer: Peer | null = null;
@@ -55,11 +61,12 @@ function joinScreen(err = '') {
 
 async function go() {
   room = (document.getElementById('code') as HTMLInputElement).value.toUpperCase().replace(/[^A-Z]/g, '');
-  name = (document.getElementById('name') as HTMLInputElement).value.trim().slice(0, 14);
+  name = (document.getElementById('name') as HTMLInputElement).value.trim().slice(0, 14) || name;
   store('dink-name', name);
   if (room.length !== 4) return joinScreen('Enter the 4-letter code on the TV.');
   unlockAudio();
-  const ok = await askMotion();
+  const ok = native ? true : await askMotion();
+  if (native) toNative({ t: 'start' });
   if (!ok) return joinScreen('Motion access is needed to swing. Allow it in the prompt (Safari: aA › Website Settings › Motion).');
   void wakeLock();
   paddleScreen();
@@ -229,6 +236,7 @@ function wrap(x: number) {
   return Math.atan2(Math.sin(x), Math.cos(x));
 }
 function recenter() {
+  if (native) toNative({ t: 'recenter' });
   if (face.ok) fwdHeading = face.heading;
 }
 
@@ -334,6 +342,7 @@ function flash(kind: 'great' | 'ok' | 'miss') {
 /** vibration where the browser has it; on iOS Safari (no vibrate) a switch control's haptic tick */
 let hapticEl: HTMLLabelElement | null = null;
 function buzz(pattern: number | number[]) {
+  if (native) { toNative({ t: 'haptic', k: Array.isArray(pattern) ? 'point' : pattern > 30 ? 'hard' : 'hit' }); return; }
   if (navigator.vibrate && navigator.vibrate(pattern)) return;
   if (!hapticEl) {
     hapticEl = document.createElement('label');
@@ -380,7 +389,19 @@ function escapeHtml(s: string) {
 // desktop testing: no motion sensors → space bar / tap the paddle to "swing"
 addEventListener('keydown', (e) => { if (e.code === 'Space' && connected) { send({ t: 'swing', power: e.shiftKey ? 0.9 : 0.5, lift: 0, peak: 0 }); meter(0.5); } });
 
-joinScreen();
+/** the app found a swing peak (its own 100 Hz sensor fusion): forward it like one of ours */
+(window as unknown as Record<string, unknown>).__nativeSwing = (w: { power: number; lift: number; face: number; aim: number | null; ago: number; peak: number }) => {
+  if (!connected) return;
+  const now = performance.now() / 1000;
+  send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago });
+  meter(w.power);
+};
+
+// the app passes the room (from its QR scanner) and the name: go straight in
+if (native && room.length === 4 && name) {
+  joinScreen();
+  void go();
+} else joinScreen();
 // tapping the paddle also swings (for desktop tests and accessibility)
 app.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
