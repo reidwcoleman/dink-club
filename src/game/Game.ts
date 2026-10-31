@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BallSim, predict, WIND, type BallEvent, v3 } from '../sim/Ball.ts';
+import { BallSim, predict, WIND, spinFor, type BallEvent, v3 } from '../sim/Ball.ts';
 import { solveShot, flyToGround, type ShotSpec } from '../sim/Shot.ts';
 import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
@@ -672,6 +672,8 @@ export class Game {
     if (!this.pred && this.ball.frozen) return;
     // the ball is at the paddle and the game is waiting on the swing: that's the contact
     if (p.plan?.waited && !force) return;
+    // a ball a swing has already taken early: that contact stands
+    if (p.plan?.taken && !force) return;
     const b = this.ball;
     const pr = predict(b.p, b.v, b.w, b.surface, 4, 1 / 120, 3);
     const events = pr.events.slice();
@@ -822,7 +824,9 @@ export class Game {
       if (Math.abs(lat) < 0.3) plan.forehand = sw.hand > 0;
     }
     const err = raw - this.lag[p.index];
-    if (err < -EARLY) {
+    // (paddles: a swing at a ball already in reach is never too early — it's taken there)
+    const canTake = this.paddlesOnly && !plan.realContact && plan.tContact - this.clock > 0.13 && !!this.takeEarly(p, plan, this.clock + 0.09, true);
+    if (err < -EARLY && !canTake) {
       this.say(`too early ${err.toFixed(2)}`);
       this.hud.timing('Too early', p.index);
       return;
@@ -836,8 +840,21 @@ export class Game {
     // the ball is already at the paddle (the game waited): snap the stroke through it now
     const waiting = !!plan.realContact;
     // (a beat for the full reading of the swing to arrive when the game was waiting on it)
-    const strikeAt = waiting ? this.clock + 0.04 : Math.max(this.clock + 0.05, plan.tContact);
-    this.committed[p.index] = { at: strikeAt, err, swing: sw, realAt: this.realClock };
+    let strikeAt = waiting ? this.clock + 0.04 : Math.max(this.clock + 0.05, plan.tContact);
+    let errUse = err;
+    // paddles: you swing, it's struck — a ball already on your side and in reach is taken where the
+    // swing meets it (~90 ms on, the swing's peak), out in front, rather than held for the planned spot
+    if (canTake) {
+      const at = this.takeEarly(p, plan, this.clock + 0.09);
+      if (at) {
+        strikeAt = this.clock + 0.09;
+        plan.tContact = strikeAt;
+        plan.taken = true;
+        // (taken early on purpose: it angles a little across, it isn't a mistimed hit)
+        errUse = THREE.MathUtils.clamp(err * 0.35, -0.12, 0.12);
+      }
+    }
+    this.committed[p.index] = { at: strikeAt, err: errUse, swing: sw, realAt: this.realClock };
     this.padSwing[p.index] = { t0: this.clock, tc: strikeAt, power: sw.power, lift: sw.lift, fh: plan.forehand, id: sw.id ?? null };
     plan.swung = true;
     // the stroke the phone made: a chop down is a slice, a brush up a topspin stroke
@@ -857,7 +874,9 @@ export class Game {
     const atKitchen = Math.abs(plan.body.z) < NVZ + 1.1;
     const open = sw.face == null ? null : plan.forehand ? sw.face : -sw.face;
     if (plan.smash && sw.power > 0.4) return 'smash';
-    const lobby = open === null ? sw.lift > 0.55 : sw.lift > 0.4 && open > 0.3;
+    // a lob is a scoop under the ball with the face open to the sky; brushing up hard with the face
+    // square is a topspin drive (it dips), not a lob
+    const lobby = open === null ? sw.lift > 0.8 && sw.power < 0.6 : sw.lift > 0.35 && open > 0.3;
     if (lobby && sw.power > 0.22) return 'lob';
     if (sw.power < 0.3) return atKitchen ? 'dink' : 'drop';
     if (sw.power < 0.66) return plan.volley && atKitchen && plan.ball.y > 1.0 ? 'drive' : 'reset';
@@ -870,9 +889,10 @@ export class Game {
     let rpm: number;
     if (type === 'smash') rpm = 300;
     else if (type === 'lob') rpm = 600 + Math.max(0, sw.lift) * 900;
-    else if (sw.lift >= 0) rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1200 : 2600) * (1 - Math.max(0, open) * 0.5);
-    else rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1400 : 2200) * (1 + Math.max(0, open) * 0.6);
-    rpm = THREE.MathUtils.clamp(rpm, -2300, 2600);
+    // (a pro's topspin drive is ~2000–2500 rpm, a rolled dink ~600–1000, a sliced dink ~800–1200)
+    else if (sw.lift >= 0) rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1400 : 3000) * (1 - Math.max(0, open) * 0.4) * (0.75 + 0.35 * sw.power);
+    else rpm = sw.lift * (type === 'dink' || type === 'drop' ? 1700 : 2600) * (1 + Math.max(0, open) * 0.5) * (0.75 + 0.35 * sw.power);
+    rpm = THREE.MathUtils.clamp(rpm, -2500, 2800);
     const a = Math.abs(rpm);
     const label = a < 450 ? '' : rpm > 0 ? (a > 1600 ? 'Heavy topspin' : 'Topspin') : a > 1400 ? 'Heavy slice' : 'Slice';
     return { rpm, label };
@@ -941,7 +961,7 @@ export class Game {
     p.plan = null;
     const body = this.bodyMode(p);
     const reach = body ? (this.paddlesOnly ? 1.3 + (plan.lunge ? LUNGE : 0) : 1.05) : p.human ? 1.9 : 1.1, reachY = body ? (this.paddlesOnly ? 1.1 : 0.8) : p.human ? 1.4 : 0.9;
-    if (dh > reach || dy > reachY || b.y > 2.8 || b.y < 0.04) {
+    if ((!plan.taken && (dh > reach || dy > reachY)) || b.y > 2.8 || b.y < 0.04) {
       this.missed[p.index] = true;
       this.say(`miss ${this.names[p.index]} bp=${p.pos.distanceTo(plan.body).toFixed(2)} as=${this.padAssist[p.index].length().toFixed(2)} late=${plan.late.toFixed(2)} lunge=${plan.lunge} dh=${dh.toFixed(2)} dy=${dy.toFixed(2)} y=${b.y.toFixed(2)}`);
       if (p.human) this.onPadEvent?.(p.index, 'whiff', {});
@@ -958,7 +978,8 @@ export class Game {
       // at full stretch (the run got there late) the contact is weaker
       if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
       // off the sweet spot: the ball came in away from where the paddle wanted it
-      quality *= body && !this.paddlesOnly ? 1 - Math.min(0.6, Math.max(0, dh - 0.3) * 0.9) : 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
+      if (plan.taken) { /* met where the swing put the paddle: on the sweet spot */ }
+      else quality *= body && !this.paddlesOnly ? 1 - Math.min(0.6, Math.max(0, dh - 0.3) * 0.9) : 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
       // a hard ball leaves no margin: a block of a smash has to be timed
       if (inSpeed > 16) quality *= 1 - Math.min(0.6, ((inSpeed - 16) / 10) * (Math.max(0, Math.abs(err) - 0.04) / 0.08));
       const i = p.index;
@@ -1138,7 +1159,7 @@ export class Game {
       }
       if (sideRpm > 600 && p.shot && sideRpm > Math.abs(p.shot.rpm ?? 0) * 0.8) p.shot.label = sideRpm > 1300 ? 'Heavy sidespin' : 'Sidespin';
     }
-    this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${p.human && Math.abs(sol.w.y) * 9.55 > 300 ? ` side=${Math.round(sol.w.y * 9.55)}` : ''}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
+    this.say(`hit ${this.names[p.index]} ${type}${p.shot?.rpm !== undefined ? ` rpm=${Math.round(p.shot.rpm)} aim=${aimX.toFixed(2)}` : ''} q=${quality.toFixed(2)} p=${power.toFixed(2)} ${(sol.speed * 3.6).toFixed(0)}kmh from(${contact.x.toFixed(1)},${contact.y.toFixed(2)},${contact.z.toFixed(1)}) to(${target.x.toFixed(1)},${target.z.toFixed(1)}) ok=${sol.ok}${p.human && Math.abs(sol.w.y) * 9.55 > 300 ? ` side=${Math.round(sol.w.y * 9.55)}` : ''}${p.human ? ` spin=${Math.round(((sol.w.x * sol.v.z - sol.w.z * sol.v.x) / (Math.hypot(sol.v.x, sol.v.z) || 1)) * 9.55)}` : ''}${plan.volley ? ' volley' : ''}${forced ? ' forced=' + forced : ''}`);
     this.launch(p, { x: contact.x, y: contact.y, z: contact.z }, sol.v, sol.w, type, power, quality);
     p.shot = null;
   }
@@ -1205,7 +1226,12 @@ export class Game {
     const dir = norm({ x: v.x + (want.x / len(want) * sp0 - v.x) * assist, y: v.y + (want.y / len(want) * sp0 - v.y) * assist, z: v.z + (want.z / len(want) * sp0 - v.z) * assist });
     // and most of the pace: a mistimed touch shot lands a little off, not in the net
     const sp = sp0 + (len(want) - sp0) * assist * 0.8;
-    return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w: hit.w };
+    // the spin is the swing's: the incoming ball's spin colours it (a heavy ball is harder to turn
+    // round), but brushing up is topspin and chopping down is slice, whatever came in
+    const own = spinFor(dir.x, dir.z, rpm), inK = Math.min(0.35, len(wIn) * 9.55 / 6000);
+    const keep = 0.2 + inK;
+    const w = { x: hit.w.x * keep + own.x * (1 - keep), y: hit.w.y, z: hit.w.z * keep + own.z * (1 - keep) };
+    return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w };
   }
 
   // ------------------------------------------------------------------------------------ ball events
@@ -1301,6 +1327,11 @@ export class Game {
         _fs2.x += (pl.ball.x - _fs2.x) * w * 0.85;
         _fs2.z += (pl.ball.z - _fs2.z) * w * 0.85;
         _fs2.y += (pl.ball.y - _fs2.y) * w * 0.95;
+        // ready: cocked a little behind where it'll meet the ball, so the swing comes forward from there
+        if (!this.padSwing[p.index]) {
+          const d = _fd.copy(p.fwd).addScaledVector(p.right, pl.forehand ? -0.35 : 0.35).normalize();
+          _fs2.addScaledVector(d, -0.25 * w);
+        }
       }
     }
     // your serve: the paddle goes down to the dropped ball
@@ -1353,13 +1384,13 @@ export class Game {
   private strokeOffset(p: Player, sw: { t0: number; tc: number; power: number; lift: number; fh: boolean }, out: THREE.Vector3): boolean {
     const now = this.clock, pw = THREE.MathUtils.clamp(sw.power, 0, 1);
     const dir = _fd.copy(p.fwd).addScaledVector(p.right, sw.fh ? -0.35 : 0.35).normalize();
-    const back = 0.12 + 0.5 * pw, fol = 0.18 + 0.75 * pw;
+    const back = 0.2 + 0.35 * pw, fol = 0.18 + 0.75 * pw;
     const fwdT = 0.2 - 0.07 * pw, folT = 0.2 + 0.08 * pw;
     const rise = 0.06 + Math.max(0, sw.lift) * 0.45 - Math.max(0, -sw.lift) * 0.25;
     out.set(0, 0, 0);
     if (now < sw.tc) {
       // taken back quickly, then forward to the ball (an easing that's fastest at contact)
-      const take = THREE.MathUtils.smoothstep(now - sw.t0, 0, 0.09);
+      const take = 0.6 + 0.4 * THREE.MathUtils.smoothstep(now - sw.t0, 0, 0.06);
       const u = THREE.MathUtils.clamp((now - (sw.tc - fwdT)) / fwdT, 0, 1);
       const g = take * (1 - u * u);
       out.addScaledVector(dir, -back * g);
@@ -1373,6 +1404,40 @@ export class Game {
     out.addScaledVector(dir, fol * f * fade);
     out.y += rise * f * fade;
     return true;
+  }
+
+  /**
+   * Where the ball will be at `t` if a swing can take it then: on this player's side, at a
+   * hittable height, within a stretch of the player, and legal (after its bounce when the
+   * two-bounce rule wants one; no volley with the body in the kitchen). Updates the plan's
+   * contact to it; null if it can't be taken yet.
+   */
+  private takeEarly(p: Player, plan: Plan, t: number, dry = false): THREE.Vector3 | null {
+    const pr = this.pred;
+    if (!pr) return null;
+    const dt = t - pr.t0;
+    const pts = pr.pts;
+    let i = 1;
+    while (i < pts.length && pts[i].t < dt) i++;
+    if (i >= pts.length) return null;
+    const a = pts[i - 1], b = pts[i];
+    const k = THREE.MathUtils.clamp((dt - a.t) / Math.max(1e-6, b.t - a.t), 0, 1);
+    const at = new THREE.Vector3(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k);
+    if (at.z * p.side < 0.35 || at.y < 0.12 || at.y > 2.4) return null;
+    const myBounce = pr.events.find((e) => e.kind === 'bounce' && e.z * p.side > 0);
+    const bounced = (this.bouncesAfterHit > 0 && this.bounceSide === p.side) || (!!myBounce && myBounce.t < dt);
+    if (!bounced && (this.strikes < 3 || Math.abs(p.pos.z) <= NVZ + 0.08)) return null;
+    // (a second bounce on this side first: too late, not early)
+    if (bounced && pr.events.some((e) => e.kind === 'bounce' && e.z * p.side > 0 && e !== myBounce && e.t < dt)) return null;
+    if (Math.hypot(at.x - p.pos.x, at.z - p.pos.z) > 1.9) return null;
+    if (dry) return at;
+    plan.ball.copy(at);
+    plan.bounced = bounced;
+    plan.volley = !bounced;
+    plan.smash = at.y > 1.75;
+    const lat = (at.x - p.pos.x) * p.right.x + (at.z - p.pos.z) * p.right.z;
+    if (Math.abs(lat) > 0.3) plan.forehand = lat > 0;
+    return at;
   }
 
   private bodyCheck() {

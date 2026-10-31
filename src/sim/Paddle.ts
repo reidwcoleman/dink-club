@@ -17,8 +17,8 @@ import { type V3, v3 } from './Ball.ts';
 export function paddleE(normalSpeed: number): number {
   return Math.max(0.3, 0.44 - Math.max(0, normalSpeed - 15) * 0.006);
 }
-/** grit: how much of the sliding gets gripped (≤ 0.6, rolling) */
-export const PADDLE_GRIP = 0.5;
+/** grit: how much of the sliding gets gripped (a hollow shell, I = ⅔ m r², rolls once 2/5 of the slide is taken off) */
+export const PADDLE_GRIP = 0.4;
 
 export interface Impact {
   v: V3;

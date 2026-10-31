@@ -38,6 +38,8 @@ export interface Plan {
   realContact?: number;
   /** the game already paused at contact waiting for this player's swing */
   waited?: boolean;
+  /** a paddles-mode swing took the ball early, out in front, where the swing met it */
+  taken?: boolean;
 }
 
 /** how far a lunge stretches the reach (m) */
