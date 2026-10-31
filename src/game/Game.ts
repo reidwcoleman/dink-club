@@ -245,15 +245,19 @@ export class Game {
   }
 
   /** a phone's angle (handle → head, screen normal; room frame = the player's right, up, forward) */
-  setPaddleAngle(slot: number, shaft: number[], face: number[], pos: number[] | null = null) {
-    this.players?.[slot]?.rig.setLive(shaft, face);
+  setPaddleAngle(slot: number, shaft: number[], face: number[], pos: number[] | null = null, vel: number[] | null = null, w: number[] | null = null, delay = 0.02) {
+    // the pose is a Wi-Fi hop old when it lands, and a frame older when it's seen: it's carried
+    // forward by the phone's own turn rate and speed over that time, so the paddle is where the
+    // phone is now, not where it was
+    const lead = THREE.MathUtils.clamp(delay, 0, 0.06) + 0.025;
+    this.players?.[slot]?.rig.setLive(shaft, face, w, lead);
     if (!pos) return;
     const now = performance.now() / 1000, prev = this.padRoom[slot], y0 = this.padY0[slot];
     // the height you hold it at drifts into the baseline over a few seconds: raising or lowering
     // the phone moves the paddle, but where you happen to hold it doesn't park it in the air
     if (y0 == null) this.padY0[slot] = pos[1];
     else this.padY0[slot] = y0 + (pos[1] - y0) * Math.min(1, Math.max(0, now - (prev?.t ?? now)) / 2.5);
-    this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: now };
+    this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: now, vx: vel?.[0] ?? 0, vy: vel?.[1] ?? 0, vz: vel?.[2] ?? 0, lead };
   }
   /**
    * Paddles only: the stroke the paddle is drawing (game clock) — taken back from the moment the
@@ -266,7 +270,7 @@ export class Game {
   /** paddles only: how far an incoming ball has carried this player beyond where the room puts them */
   private padAssist = [new THREE.Vector3(), new THREE.Vector3()];
   /** each phone's position in the room as its camera tracking sees it, unheld through swings (room frame) */
-  private padRoom: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
+  private padRoom: ({ x: number; y: number; z: number; t: number; vx: number; vy: number; vz: number; lead: number } | null)[] = [null, null];
   /** the phone's usual height (a slow average): there the paddle is at ~0.9 m */
   private padY0: (number | null)[] = [null, null];
   /** the paddle's flight (its sweet spot) a beat ago, for the pull onto the ball at contact */
@@ -284,9 +288,14 @@ export class Game {
     // the body's mapping (held through swings) and the hand's motion away from it
     const as = this.padAssist[p.index];
     const bx = a.cx + s * (b.x - a.px) * G + as.x, bz = a.cz - s * (b.z - a.pz) * G + as.z;
-    const hx = s * (r.x - b.x) * 1.15, hz = -s * (r.z - b.z) * 1.15;
+    // (led by the phone's velocity over the link delay and the time since it arrived)
+    const ld = Math.min(0.12, r.lead + performance.now() / 1000 - r.t);
+    // (at most 0.3 m ahead: a whip's speed is a guess for longer than a blink)
+    const vl = Math.hypot(r.vx, r.vy, r.vz), kl = vl * ld > 0.3 ? 0.3 / (vl * ld) : 1;
+    const rx = r.x + r.vx * ld * kl, ry = r.y + r.vy * ld * kl, rz = r.z + r.vz * ld * kl;
+    const hx = s * (rx - b.x) * 1.15, hz = -s * (rz - b.z) * 1.15;
     const y0 = this.padY0[p.index] ?? (this.padY0[p.index] = r.y);
-    out.set(bx + hx, 0.9 + THREE.MathUtils.clamp((r.y - y0) * 1.15, -0.6, 0.7), bz + hz);
+    out.set(bx + hx, 0.9 + THREE.MathUtils.clamp((ry - y0) * 1.15, -0.6, 0.7), bz + hz);
     return out;
   }
 

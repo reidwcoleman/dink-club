@@ -18,7 +18,7 @@ export type PadMsg =
   /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
   | { t: 'pos'; x: number; z: number; vx?: number; vz?: number }
   /** the phone's angle, ~30 a second: its long edge (handle → head) and its screen normal, room frame */
-  | { t: 'ori'; s: number[]; f: number[]; p?: number[] }
+  | { t: 'ori'; s: number[]; f: number[]; p?: number[]; v?: number[]; w?: number[] }
   | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
@@ -54,7 +54,8 @@ export class Lobby {
   onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null; hand: number | null; id: number | null; pre: boolean }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
   onPos: ((slot: number, x: number, z: number, vx: number, vz: number) => void) | null = null;
-  onOri: ((slot: number, shaft: number[], face: number[], pos: number[] | null) => void) | null = null;
+  /** a phone's pose: angle, position, velocity (m/s) and turn rate (rad/s) in its room frame, and the link's one-way delay (s) */
+  onOri: ((slot: number, shaft: number[], face: number[], pos: number[] | null, vel: number[] | null, w: number[] | null, delay: number) => void) | null = null;
   onChange: (() => void) | null = null;
   private pingK = 0;
 
@@ -186,7 +187,7 @@ export class Lobby {
       }
       if (m.t === 'ori') {
         const sv = vec3(m.s), fv = vec3(m.f);
-        if (sv && fv) this.onOri?.(slot, sv, fv, vec3(m.p));
+        if (sv && fv) this.onOri?.(slot, sv, fv, vec3(m.p), vec3(m.v), vec3(m.w), this.delay(slot));
         return;
       }
       if (m.t === 'swing') {

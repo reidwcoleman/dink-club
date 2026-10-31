@@ -94,7 +94,7 @@ lobby.onSwing = (slot, s) => {
   if (summaryEl && game?.match?.winner !== null) rematch();
 };
 lobby.onPos = (slot, x, z, vx, vz) => game?.setBodyPos(slot, x, z, vx, vz);
-lobby.onOri = (slot, sh, f, pos) => game?.setPaddleAngle(slot, sh, f, pos);
+lobby.onOri = (slot, sh, f, pos, vel, w, delay) => game?.setPaddleAngle(slot, sh, f, pos, vel, w, delay);
 lobby.onTap = (slot, what) => {
   audio.start();
   if (what === 'start' && !inMatch && !menu.root.classList.contains('busy')) void play(choice);

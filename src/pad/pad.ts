@@ -420,10 +420,10 @@ let lastPos = 0;
 };
 
 /** the app's paddle angle (handle → head, and the screen's normal), ~30 a second: the TV's paddle mirrors it */
-(window as unknown as Record<string, unknown>).__nativeOri = (q: { s: number[]; f: number[]; p?: number[] }) => {
+(window as unknown as Record<string, unknown>).__nativeOri = (q: { s: number[]; f: number[]; p?: number[]; v?: number[]; w?: number[] }) => {
   if (!connected) return;
   const r = (v: number) => Math.round(v * 1000) / 1000;
-  send({ t: 'ori', s: q.s.map(r), f: q.f.map(r), ...(q.p ? { p: q.p.map(r) } : {}) });
+  send({ t: 'ori', s: q.s.map(r), f: q.f.map(r), ...(q.p ? { p: q.p.map(r) } : {}), ...(q.v ? { v: q.v.map(r) } : {}), ...(q.w ? { w: q.w.map(r) } : {}) });
 };
 
 // the app passes the room (from its QR scanner) and the name: go straight in

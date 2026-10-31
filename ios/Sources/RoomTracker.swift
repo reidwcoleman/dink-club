@@ -37,7 +37,7 @@ final class RoomTracker: NSObject, ARSessionDelegate {
     private var hist: [Sample] = []
     private var fx = OneEuro(), fz = OneEuro()
     private var px = OneEuro(minCutoff: 3, beta: 1.5), py = OneEuro(minCutoff: 3, beta: 1.5), pz = OneEuro(minCutoff: 3, beta: 1.5)
-    private var latest: (t: TimeInterval, pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>)?
+    private var latest: (t: TimeInterval, pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>, vel: SIMD3<Double>)?
     private var body: (x: Double, z: Double)?
     private var vel = (x: 0.0, z: 0.0)
     private(set) var ok = false
@@ -101,15 +101,20 @@ final class RoomTracker: NSObject, ARSessionDelegate {
             let sh = toRoom(simd_float3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
             let fc = toRoom(simd_float3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
             lock.lock()
-            latest = (t, pos, sh, fc)
+            latest = (t, pos, sh, fc, latest?.vel ?? .zero)
             lock.unlock()
         }
         lock.lock()
         hist.append(Sample(t: t, p: p, n: n))
         if hist.count > 90 { hist.removeFirst(hist.count - 90) }
-        let recent = hist.suffix(5)
+        let recent = Array(hist.suffix(5))
         lock.unlock()
-        watchPush(Array(recent), t: t, rel: Double(simd_dot(p - o, right)) - (body?.x ?? 0))
+        if let v = slope(recent) {
+            lock.lock()
+            if let l = latest { latest = (l.t, l.pos, l.shaft, l.face, v) }
+            lock.unlock()
+            watchPush(recent, v: v, t: t, rel: Double(simd_dot(p - o, right)) - (body?.x ?? 0))
+        }
         // where you stand: held through a swing (and a beat after), filtered otherwise
         defer { prevT = t }
         let d = p - o
@@ -138,16 +143,19 @@ final class RoomTracker: NSObject, ARSessionDelegate {
      cleanly. A push: the paddle moves toward the net at over 0.45 m/s, peaks and slows to under
      half that within 0.4 s (a walk forward doesn't slow down, so it isn't one).
      */
-    private func watchPush(_ w: [Sample], t: TimeInterval, rel: Double) {
-        guard w.count >= 4 else { return }
-        // the velocity: least-squares slope through the last few frames
+    /// the phone's velocity (m/s, room frame): the least-squares slope through the last few frames
+    private func slope(_ w: [Sample]) -> SIMD3<Double>? {
+        guard w.count >= 4 else { return nil }
         let tm = w.reduce(0.0) { $0 + $1.t } / Double(w.count)
         let pm = w.reduce(simd_double3(0, 0, 0)) { $0 + simd_double3($1.p) } / Double(w.count)
         var num = simd_double3(0, 0, 0), den = 0.0
         for s in w { let dt = s.t - tm; num += (simd_double3(s.p) - pm) * dt; den += dt * dt }
-        guard den > 1e-7 else { return }
+        guard den > 1e-7 else { return nil }
         let vw = num / den
-        let v = SIMD3(simd_dot(vw, simd_double3(right)), vw.y, simd_dot(vw, simd_double3(fwd)))
+        return SIMD3(simd_dot(vw, simd_double3(right)), vw.y, simd_dot(vw, simd_double3(fwd)))
+    }
+
+    private func watchPush(_ w: [Sample], v: SIMD3<Double>, t: TimeInterval, rel: Double) {
         let nl = simd_double3(w.last!.n)
         let n = SIMD3(simd_dot(nl, simd_double3(right)), nl.y, simd_dot(nl, simd_double3(fwd)))
         let sp = simd_length(v)
@@ -167,12 +175,12 @@ final class RoomTracker: NSObject, ARSessionDelegate {
 
     /// the phone right now from the camera tracking (position, long edge, screen normal; room
     /// frame), or nil if tracking has no fresh frame (a fast swing blurs it, the phone is locked)
-    func pose(now: TimeInterval) -> (pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>)? {
+    func pose(now: TimeInterval) -> (pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>, vel: SIMD3<Double>)? {
         lock.lock()
         let l = latest
         lock.unlock()
         guard ok, let l, now - l.t < 0.08 else { return nil }
-        return (l.pos, l.shaft, l.face)
+        return (l.pos, l.shaft, l.face, l.vel)
     }
 
     /// the paddle around time `t` (CMLogItem / ARFrame clock): velocity and face normal in the room

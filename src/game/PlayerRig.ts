@@ -252,10 +252,17 @@ export class PlayerRig {
    * prepared, the player's paddle is held at that angle: tilt the phone and the paddle tilts, take
    * it back and the paddle goes back.
    */
-  setLive(shaft: number[], face: number[]) {
+  setLive(shaft: number[], face: number[], w: number[] | null = null, lead = 0) {
     const sh = new THREE.Vector3(shaft[0], shaft[1], shaft[2]);
     const f = new THREE.Vector3(face[0], face[1], face[2]);
     if (sh.lengthSq() < 0.25 || f.lengthSq() < 0.25) return;
+    if (w && lead > 0) {
+      // turned on by the phone's turn rate over `lead` s (its angle as it is now, not as sent)
+      const ax = _lw.set(w[0], w[1], w[2]);
+      const a = Math.min(0.7, ax.length() * lead);
+      // (the room frame — right, up, toward the TV — is left-handed: a turn about w is −a here)
+      if (a > 1e-3) { ax.normalize(); sh.applyAxisAngle(ax, -a); f.applyAxisAngle(ax, -a); }
+    }
     this.liveIn = { shaft: sh.normalize(), face: f.normalize() };
     this.liveAt = this.clock;
   }
@@ -834,6 +841,7 @@ function mixKey(a: Key, b: Key, u: number): Key {
   const n = (x: L3, y: L3): L3 => { const v = l(x, y), m = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; };
   return { ...b, head: l(a.head, b.head), shaft: n(a.shaft, b.shaft), face: n(a.face, b.face), pole: u < 0.5 ? a.pole : b.pole };
 }
+const _lw = new THREE.Vector3();
 const _lq1 = new THREE.Vector3(), _lq2 = new THREE.Vector3(), _lq3 = new THREE.Vector3(), _lm = new THREE.Matrix4();
 const smooth = (x: number) => {
   const t = Math.min(1, Math.max(0, x));

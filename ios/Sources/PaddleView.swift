@@ -70,6 +70,10 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     private let pock = Pock()
     /// the motion sensors' heading correction (rad), trued to the camera tracking whenever it sees
     private var yawTrue = 0.0
+    /// the paddle's position carried on by the motion sensors through a gap in the camera tracking
+    /// (the last camera fix's time is `at`; `t` the last step)
+    private var fix: (pos: SIMD3<Double>, t: TimeInterval, at: TimeInterval)?
+    private var lastFixPos: SIMD3<Double>?
     @Published var live = false
     @Published var pulse = false
     @Published var text = "Connecting…"
@@ -117,14 +121,15 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
             }
         }
-        motion.onPose = { [weak self] sh0, f0 in
+        motion.onPose = { [weak self] sh0, f0, w0, vh0 in
             guard let self, self.live else { return }
             // the camera tracking holds the room still (no heading drift): when it has the phone,
             // its angle is the paddle's and the motion sensors' heading is trued to it; through a
             // fast swing (blurred frames) the motion sensors carry on, trued by the last offset
             var sh = sh0, f = f0
-            var pos: SIMD3<Double>? = nil
-            if let ar = self.tracker.pose(now: ProcessInfo.processInfo.systemUptime) {
+            var pos: SIMD3<Double>? = nil, vel: SIMD3<Double>? = nil
+            let now = ProcessInfo.processInfo.systemUptime
+            if let ar = self.tracker.pose(now: now) {
                 let heading = { (a: SIMD3<Double>, b: SIMD3<Double>) -> Double in
                     let v = a.x * a.x + a.z * a.z > b.x * b.x + b.z * b.z ? a : b
                     return atan2(v.x, v.z)
@@ -132,15 +137,32 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 var d = heading(ar.face, ar.shaft) - heading(f0, sh0)
                 d = atan2(sin(d), cos(d))
                 self.yawTrue += atan2(sin(d - self.yawTrue), cos(d - self.yawTrue)) * 0.15
-                sh = ar.shaft; f = ar.face; pos = ar.pos
-            } else {
-                let c = cos(self.yawTrue), s = sin(self.yawTrue)
-                let rot = { (v: SIMD3<Double>) in SIMD3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c) }
-                sh = rot(sh0); f = rot(f0)
+                sh = ar.shaft; f = ar.face; pos = ar.pos; vel = ar.vel
+                self.fix = (ar.pos, now, now)
             }
-            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f, pos: pos) }
+            // the motion sensors' vectors in the camera's room (trued by the heading offset)
+            let c = cos(self.yawTrue), s = sin(self.yawTrue)
+            let rot = { (v: SIMD3<Double>) in SIMD3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c) }
+            let w = rot(w0)
+            if pos == nil {
+                sh = rot(sh0); f = rot(f0)
+                // the camera lost the phone (a blurred whip, a hand over the lens): the motion
+                // sensors carry the paddle on from its last fix for a moment, never far from it
+                if var fx = self.fix, now - fx.at < 0.6 {
+                    let vh = rot(vh0)
+                    var p = fx.pos + vh * min(0.05, max(0, now - fx.t))
+                    let d = p - (self.lastFixPos ?? fx.pos)
+                    if simd_length(d) > 1.2 { p = (self.lastFixPos ?? fx.pos) + simd_normalize(d) * 1.2 }
+                    fx.pos = p; fx.t = now
+                    self.fix = fx
+                    pos = p; vel = vh
+                }
+            } else { self.lastFixPos = pos }
+            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f, pos: pos, vel: vel, w: w) }
             else {
-                let p = pos.map { String(format: ",p:[%.3f,%.3f,%.3f]", $0.x, $0.y, $0.z) } ?? ""
+                var p = pos.map { String(format: ",p:[%.3f,%.3f,%.3f]", $0.x, $0.y, $0.z) } ?? ""
+                if let v = vel { p += String(format: ",v:[%.3f,%.3f,%.3f]", v.x, v.y, v.z) }
+                p += String(format: ",w:[%.3f,%.3f,%.3f]", w.x, w.y, w.z)
                 self.web?.evaluateJavaScript(String(format: "window.__nativeOri && window.__nativeOri({s:[%.3f,%.3f,%.3f],f:[%.3f,%.3f,%.3f]%@})", sh.x, sh.y, sh.z, f.x, f.y, f.z, p))
             }
         }
@@ -335,8 +357,9 @@ struct Swing {
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
-    /// the phone's angle ~60 a second: long edge (handle → head) and screen normal, room frame
-    var onPose: ((SIMD3<Double>, SIMD3<Double>) -> Void)?
+    /// the phone ~60 a second, room frame: long edge (handle → head), screen normal, turn rate
+    /// (rad/s) and the hand's velocity from the motion sensors (m/s, a leaky integral: good over a swing)
+    var onPose: ((SIMD3<Double>, SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) -> Void)?
     private var lastPose: TimeInterval = 0
     /// turn about the vertical through the current swing (rad, + = counterclockwise from above)
     private var yawTurn = 0.0
@@ -427,8 +450,8 @@ final class SwingDetector {
         let w = SIMD3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z)
         if t - lastPose > 1.0 / 60 - 0.002 {
             lastPose = t
-            let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1))
-            DispatchQueue.main.async { self.onPose?(sh, fc) }
+            let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1)), wr = room(w), vh = vHand
+            DispatchQueue.main.async { self.onPose?(sh, fc, wr, vh) }
         }
         let g = simd_length(w) * 180 / .pi
         if g > 140 { lastFast = t }
