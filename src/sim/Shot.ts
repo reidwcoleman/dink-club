@@ -69,7 +69,7 @@ export function solveShot(p0: V3, target: { x: number; z: number }, spec: ShotSp
   const clear = spec.clear ?? 0.05;
   let speed = spec.speed;
   let best: ShotSolution | null = null;
-  for (let attempt = 0; attempt < 14; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     let sol = solveAtSpeed(p0, target, speed, spec);
     const good = (s: ShotSolution) => s.netClear >= clear && Math.hypot(s.land.x - target.x, s.land.z - target.z) < 0.6;
     let ok = good(sol);
@@ -85,8 +85,8 @@ export function solveShot(p0: V3, target: { x: number; z: number }, spec: ShotSp
     // can't get there (into a headwind, say): hit harder; into the net at this pace: ease off
     // for a higher arc
     const short = Math.hypot(sol.land.x - p0.x, sol.land.z - p0.z) < Math.hypot(target.x - p0.x, target.z - p0.z) - 0.6;
-    if (spec.soft || short) speed *= 1.09;
-    else speed *= 0.92;
+    if (spec.soft || short) speed *= 1.12;
+    else speed *= 0.9;
     if (speed < 3) break;
   }
   return best!;
@@ -103,27 +103,33 @@ function solveAtSpeed(p0: V3, target: { x: number; z: number }, speed: number, s
   const velOf = (e: number, a: number) => v3(Math.cos(e) * Math.cos(a) * speed, Math.sin(e) * speed, Math.cos(e) * Math.sin(a) * speed);
   for (let iter = 0; iter < 3; iter++) {
     w = spinFor(Math.cos(az), Math.sin(az), spec.rpm, spec.side ?? 0);
+    // (trial flights at 1/120 s: the real flight is the ball sim's; the TV's CPU runs this at a hit)
     const range = (e: number) => {
-      const r = flyToGround(p0, velOf(e, az), w, 1 / 180);
+      const r = flyToGround(p0, velOf(e, az), w, 1 / 120);
       // signed distance along the aim direction
       return ((r.x - p0.x) * dx + (r.z - p0.z) * dz) / D;
     };
-    // the elevation of maximum range (golden section)
-    let lo = -0.35, hi = 1.2;
-    const gr = 0.618;
-    let c = hi - gr * (hi - lo), d = lo + gr * (hi - lo);
-    let fc = range(c), fd = range(d);
-    for (let k = 0; k < 16; k++) {
-      if (fc > fd) { hi = d; d = c; fd = fc; c = hi - gr * (hi - lo); fc = range(c); }
-      else { lo = c; c = d; fc = fd; d = lo + gr * (hi - lo); fd = range(d); }
+    // the elevation of maximum range is only needed when a plain bracket doesn't reach: a low shot
+    // that gets there by 0.55 rad (~32°) never needs it
+    let eMax = 0.55, rMax = arc === 'low' ? range(eMax) : -1;
+    if (rMax < D) {
+      // golden section
+      let lo = -0.35, hi = 1.2;
+      const gr = 0.618;
+      let c = hi - gr * (hi - lo), d = lo + gr * (hi - lo);
+      let fc = range(c), fd = range(d);
+      for (let k = 0; k < 11; k++) {
+        if (fc > fd) { hi = d; d = c; fd = fc; c = hi - gr * (hi - lo); fc = range(c); }
+        else { lo = c; c = d; fc = fd; d = lo + gr * (hi - lo); fd = range(d); }
+      }
+      eMax = (lo + hi) / 2;
+      rMax = range(eMax);
     }
-    const eMax = (lo + hi) / 2;
-    const rMax = range(eMax);
     if (rMax < D) elev = eMax;
     else {
-      // bisection on the chosen branch
+      // bisection on the chosen branch (14 halvings of ~1.2 rad: under a millimetre of range)
       let a = arc === 'low' ? -0.6 : eMax, b = arc === 'low' ? eMax : 1.45;
-      for (let k = 0; k < 22; k++) {
+      for (let k = 0; k < 14; k++) {
         const m = (a + b) / 2;
         const r = range(m);
         if (arc === 'low' ? r < D : r > D) a = m;
@@ -131,13 +137,13 @@ function solveAtSpeed(p0: V3, target: { x: number; z: number }, speed: number, s
       }
       elev = (a + b) / 2;
     }
-    res = flyToGround(p0, velOf(elev, az), w, 1 / 180);
+    res = flyToGround(p0, velOf(elev, az), w, 1 / 120);
     // azimuth correction for drift
     const landAz = Math.atan2(res.z - p0.z, res.x - p0.x);
     const want = Math.atan2(dz, dx);
     let dAz = want - landAz;
     dAz = Math.atan2(Math.sin(dAz), Math.cos(dAz));
-    if (Math.abs(dAz) < 1e-4) break;
+    if (Math.abs(dAz) < 2e-3) break;
     az += dAz;
   }
   const v = velOf(elev, az);

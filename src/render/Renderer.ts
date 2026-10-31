@@ -50,6 +50,8 @@ export class Renderer {
   quality: Quality = 'high';
   adaptive = true;
   private frameTimes: number[] = [];
+  /** frames per second the loop is held to (0 = every refresh) */
+  cap = 0;
   private lastAdapt = 0;
 
   constructor(readonly canvas: HTMLCanvasElement, readonly scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
@@ -162,8 +164,8 @@ export class Renderer {
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const p80 = sorted[Math.floor(sorted.length * 0.8)];
     let s = this.scale;
-    // the TV aims for a steady ~45 fps at a sharper picture rather than chasing 60 down to a blur
-    const [down, up] = this.lite ? [1 / 40, 1 / 50] : [1 / 52, 1 / 58.5];
+    // capped (the TV: a steady 30): drop when frames slip to the next refresh, climb while they don't
+    const [down, up] = this.cap ? [1 / (this.cap * 0.82), 1 / (this.cap * 0.94)] : this.lite ? [1 / 40, 1 / 50] : [1 / 52, 1 / 58.5];
     if (p80 > down) s = Math.max(this.minScale, s - 0.05);
     else if (p80 < up) s = Math.min(this.maxScale, s + 0.03);
     if (Math.abs(s - this.scale) > 0.001) {
@@ -199,7 +201,13 @@ export class Renderer {
     gl.shadowMap.type = on ? THREE.PCFShadowMap : gl.shadowMap.type;
     // a TV's GPU is fill-bound: start lower and let it fall further; shadows re-render every other frame
     gl.shadowMap.autoUpdate = !on;
-    if (on) { this.adaptive = true; this.minScale = 0.5; this.maxScale = 0.85; this.scale = 0.68; this.resize(); }
+    if (on) {
+      this.adaptive = true;
+      // held to 30 the TV can afford a much sharper frame (it's upscaled to 1080p by the TV either way)
+      if (this.cap && this.cap <= 30) { this.minScale = 0.6; this.maxScale = 1.25; this.scale = 0.95; }
+      else { this.minScale = 0.5; this.maxScale = 0.85; this.scale = 0.68; }
+      this.resize();
+    }
   }
 
   render(dt: number) {

@@ -41,6 +41,9 @@ renderer.liveScene = world.scene;
 renderer.composer.passes.forEach((p) => ((p as unknown as { mainScene: THREE.Scene }).mainScene = world.scene));
 // on the TV app (an Android TV box's GPU) start lighter; the renderer adapts its resolution from there
 renderer.setQuality((params.get('q') as Quality) ?? (onTV ? 'low' : 'high'));
+/** the TV: a steady 30 frames a second (every other refresh) buys a sharper picture than a 60 it can't hold */
+const cap = +(params.get('fps') ?? (onTV ? 30 : 0));
+renderer.cap = cap;
 if (GFX.lite) {
   world.sky.sun.shadow.mapSize.set(1024, 1024);
   renderer.setLite(true);
@@ -260,6 +263,7 @@ let time = 0;
 let raf = 0;
 let held = false;
 function frame(now: number) {
+  if (cap && now - last < 1000 / cap - 4) { raf = requestAnimationFrame(frame); return; }
   const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
   last = now;
   if (!held) step(dt);
