@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BallSim, predict, WIND, spinFor, type BallEvent, v3 } from '../sim/Ball.ts';
 import { solveShot, flyToGround, type ShotSpec } from '../sim/Shot.ts';
 import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
-import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
+import { HL, HW, NVZ, BALL_R, FLOOR_HX, netTop } from '../sim/dims.ts';
 import { FENCE } from '../world/Club.ts';
 import { Match, type PointReason } from './Match.ts';
 import { Player, REACH, LUNGE, type Plan } from './Player.ts';
@@ -67,6 +67,7 @@ const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', r
 // the hit window around the ball reaching the paddle (after this player's learned delay): Wii
 // Sports-wide — a swing in it hits; when in it decides where the ball goes, not whether it goes
 const EARLY = 0.5, LATE = 0.3;
+const _bq = new THREE.Quaternion(), _bv = new THREE.Vector3(), _bn = new THREE.Vector3();
 const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fs2 = new THREE.Vector3(), _fv = new THREE.Vector3(), _fone = new THREE.Vector3(1.25, 1.25, 1.25), _fq = new THREE.Quaternion(), _fq2 = new THREE.Quaternion(), _fd = new THREE.Vector3();
 
 export class Game {
@@ -255,9 +256,10 @@ export class Game {
     const now = performance.now() / 1000, prev = this.padRoom[slot], y0 = this.padY0[slot];
     // the height you hold it at drifts into the baseline over a few seconds: raising or lowering
     // the phone moves the paddle, but where you happen to hold it doesn't park it in the air
+    const wm = w ? Math.hypot(w[0], w[1], w[2]) : 0, moving = Math.hypot(vel?.[0] ?? 0, vel?.[1] ?? 0, vel?.[2] ?? 0) > 0.7 || wm > 2.5;
     if (y0 == null) this.padY0[slot] = pos[1];
     else this.padY0[slot] = y0 + (pos[1] - y0) * Math.min(1, Math.max(0, now - (prev?.t ?? now)) / 2.5);
-    this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: now, vx: vel?.[0] ?? 0, vy: vel?.[1] ?? 0, vz: vel?.[2] ?? 0, lead };
+    this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: now, vx: vel?.[0] ?? 0, vy: vel?.[1] ?? 0, vz: vel?.[2] ?? 0, lead, wm, still: moving ? now : prev?.still ?? now };
   }
   /**
    * Paddles only: the stroke the paddle is drawing (game clock) — taken back from the moment the
@@ -270,9 +272,11 @@ export class Game {
   /** paddles only: how far an incoming ball has carried this player beyond where the room puts them */
   private padAssist = [new THREE.Vector3(), new THREE.Vector3()];
   /** each phone's position in the room as its camera tracking sees it, unheld through swings (room frame) */
-  private padRoom: ({ x: number; y: number; z: number; t: number; vx: number; vy: number; vz: number; lead: number } | null)[] = [null, null];
+  private padRoom: ({ x: number; y: number; z: number; t: number; vx: number; vy: number; vz: number; lead: number; wm: number; still: number } | null)[] = [null, null];
   /** the phone's usual height (a slow average): there the paddle is at ~0.9 m */
   private padY0: (number | null)[] = [null, null];
+  /** a hit's recoil on the drawn paddle: which way it was pushed, how far (m), when */
+  private padKick: ({ d: THREE.Vector3; a: number; t: number } | null)[] = [null, null];
   /** the paddle's flight (its sweet spot) a beat ago, for the pull onto the ball at contact */
   private padSnap: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
 
@@ -616,6 +620,9 @@ export class Game {
   /** a strike: the ball leaves the paddle */
   private launch(p: Player, contact: { x: number; y: number; z: number }, v: { x: number; y: number; z: number }, w: { x: number; y: number; z: number }, type: ShotType, power: number, quality: number) {
     const inSpeed = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
+    // the paddle takes the ball's change of momentum: it gives in the hand, against the new flight
+    const dv = _fd.set(this.ball.v.x - v.x, this.ball.v.y - v.y, this.ball.v.z - v.z), dvl = dv.length();
+    if (this.paddlesOnly && dvl > 1) this.padKick[p.index] = { d: dv.clone().divideScalar(dvl), a: Math.min(0.07, dvl * 0.0024), t: this.clock };
     this.ball.set(contact, v, w);
     this.ball.bounces = 0;
     this.lastHitter = p.index;
@@ -925,6 +932,8 @@ export class Game {
         plan.swung = true;
       }
       if (!c && tTo <= 0 && !plan.waited && !this.dead) {
+        // the phone held still with its face in the ball's way: no swing is coming, it's a block
+        if (this.stillPaddle(p) && this.block(p)) return;
         // the ball is at the paddle and the swing hasn't landed yet: wait for it
         plan.waited = true;
         plan.realContact = this.realClock;
@@ -932,7 +941,8 @@ export class Game {
       }
       if (!c) {
         if (plan.waited ? !this.waitHit : tTo < -LATE - 0.02) {
-          // never swung: the ball goes by
+          // never swung: the ball meets the paddle if its face is in the way, else it goes by
+          if (this.block(p)) return;
           this.missed[p.index] = true;
           this.say(`no swing ${this.names[p.index]}`);
           p.rig.cancelStroke();
@@ -1234,6 +1244,87 @@ export class Game {
     return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w };
   }
 
+  /** the phone isn't swinging: barely turning or moving for a while (not the pause at the top of a backswing) */
+  private stillPaddle(p: Player): boolean {
+    const r = this.padRoom[p.index], now = performance.now() / 1000;
+    return !!r && now - r.t < 0.3 && now - r.still > 0.3;
+  }
+
+  /**
+   * The ball meets a paddle that isn't swinging: held out in its way, the face blocks it back.
+   * The impact model with the paddle's own small motion and the face as the phone holds it: a
+   * hard ball comes back at ~40% of its pace, a soft one dies off it, and the face's tilt and turn
+   * send it. As with a swing, practice steadies it part of the way into the court. False when the
+   * face isn't in the way (edge-on to the ball, or the paddle is elsewhere): the ball goes by.
+   */
+  private block(p: Player): boolean {
+    const plan = p.plan;
+    if (!this.paddlesOnly || !plan || this.dead || !p.rig.liveQuat(_bq)) return false;
+    const d = this.padDrawn[p.index], b = this.ball;
+    if (d.t < 0 || d.p.distanceTo(_bv.set(b.p.x, b.p.y, b.p.z)) > 0.6) return false;
+    const vIn = { ...b.v }, sIn = len(vIn);
+    if (sIn < 1) return false;
+    const n = _bn.set(0, 0, 1).applyQuaternion(d.q);
+    const facing = (n.x * vIn.x + n.y * vIn.y + n.z * vIn.z) / sIn;
+    // (within ~70° of edge-on, it slips past the frame)
+    if (Math.abs(facing) < 0.35) return false;
+    if (facing > 0) n.negate();
+    // the paddle's own motion: the hand's (room to court, life size) and some of the body's
+    const r = this.padRoom[p.index], s = p.side;
+    const u = r && performance.now() / 1000 - r.t < 0.3 ? { x: s * r.vx * 1.15, y: r.vy * 1.15, z: -s * r.vz * 1.15 } : { x: 0, y: 0, z: 0 };
+    const ul = len(u);
+    if (ul > 3) { u.x *= 3 / ul; u.y *= 3 / ul; u.z *= 3 / ul; }
+    u.x += p.vel.x * 0.5; u.z += p.vel.z * 0.5;
+    const hit = impact(vIn, { ...b.w }, u, { x: n.x, y: n.y, z: n.z });
+    const c0 = { x: b.p.x, y: b.p.y, z: b.p.z };
+    // practice: a player learns the face angle that gets a block over and in. The pace and the
+    // direction across stay the impact's (a held paddle gives a slow ball almost nothing back, and
+    // nothing gets that over); the launch angle is taken most of the way to one that clears the
+    // tape by a hand and lands short of the baseline, if there is one at this pace
+    const hl = Math.hypot(hit.v.x, hit.v.z) || 1, hx = hit.v.x / hl, hz = hit.v.z / hl;
+    const e0 = Math.atan2(hit.v.y, hl);
+    const fly = (e: number, sp: number) => {
+      const r = flyToGround(c0, { x: hx * Math.cos(e) * sp, y: Math.sin(e) * sp, z: hz * Math.cos(e) * sp }, hit.w, 1 / 120, 3);
+      const clear = r.netY === Infinity ? -9 : r.netY - BALL_R - netTop(r.netX);
+      return { clear, depth: -s * r.z };
+    };
+    // (and a held paddle gives a little in the hand: up to ~30% more pace, if that's what it takes)
+    let sp = len(hit.v), e1 = e0, f1 = fly(e0, sp);
+    for (const m of [1, 1.1, 1.2, 1.3]) {
+      sp = len(hit.v) * m; e1 = e0; f1 = fly(e0, sp);
+      for (let k = 0; k < 40 && f1.clear < 0.1 && e1 < 1.1; k++) f1 = fly((e1 += 0.03), sp);
+      if (f1.clear >= 0.1) break;
+    }
+    if (f1.clear < 0.1) sp = len(hit.v);
+    for (let k = 0; k < 30 && f1.depth > HL - 0.5 && e1 > -0.5; k++) {
+      const f2 = fly(e1 - 0.03, sp);
+      if (f2.clear < 0.08) break;
+      e1 -= 0.03; f1 = f2;
+    }
+    const e = f1.clear < 0.1 ? e0 : e0 + (e1 - e0) * 0.85;
+    const v = { x: hx * Math.cos(e) * sp, y: Math.sin(e) * sp, z: hz * Math.cos(e) * sp };
+    const spin = ((hit.w.x * v.z - hit.w.z * v.x) / (Math.hypot(v.x, v.z) || 1)) * 9.55;
+    const type: ShotType = sp < 6.5 ? (Math.abs(c0.z) < NVZ + 1.1 ? 'dink' : 'drop') : 'reset';
+    p.plan = null;
+    this.committed[p.index] = null;
+    this.waitHit = null;
+    p.rig.cancelStroke();
+    // a volley with a foot in the kitchen is a fault, blocked or swung
+    if (this.bodyMode(p) && plan.volley && Math.abs(p.pos.z) <= NVZ) {
+      this.dead = true;
+      this.say(`kitchen ${this.names[p.index]}`);
+      this.hud.call('Kitchen', 'Volleyed with a foot in the kitchen', 1.6);
+      this.pendingPoint = { winner: (1 - p.index) as 0 | 1, reason: 'kitchen', at: this.clock + 0.6 };
+      return true;
+    }
+    p.shot = { type, aimX: 0, aimD: 0, power: 0.15, pressT: this.clock, released: true, label: 'Block' };
+    this.hud.timing('Block', p.index, '');
+    this.say(`block ${this.names[p.index]} ${type} in=${(sIn * 3.6).toFixed(0)}kmh out=${(sp * 3.6).toFixed(0)}kmh facing=${Math.abs(facing).toFixed(2)} u=${len(u).toFixed(1)} elev=${e0.toFixed(2)}>${e.toFixed(2)} clear=${f1.clear.toFixed(2)} depth=${f1.depth.toFixed(1)} at(${c0.x.toFixed(1)},${c0.y.toFixed(2)},${c0.z.toFixed(1)}) spin=${Math.round(spin)}`);
+    this.launch(p, c0, v, hit.w, type, 0.15, 0.7);
+    p.shot = null;
+    return true;
+  }
+
   // ------------------------------------------------------------------------------------ ball events
   private onBallEvent(e: BallEvent) {
     if (e.kind === 'net') {
@@ -1359,6 +1450,13 @@ export class Game {
     }
     if (sw && !this.strokeOffset(p, sw, _fv)) this.padSwing[p.index] = null;
     else if (sw) _fs2.add(_fv);
+    // the recoil: out to its furthest ~30 ms after the hit, back within ~0.15 s
+    const kick = this.padKick[p.index];
+    if (kick) {
+      const u = (this.clock - kick.t) / 0.03;
+      if (u > 6 || u < 0) this.padKick[p.index] = null;
+      else _fs2.addScaledVector(kick.d, kick.a * u * Math.exp(1 - u));
+    }
     // drawn smoothly: eased toward its place (quickly through a stroke, so it never trails the ball)
     const d = this.padDrawn[p.index];
     const dt = d.t < 0 ? 1 : this.realClock - d.t;
