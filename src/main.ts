@@ -42,7 +42,7 @@ renderer.composer.passes.forEach((p) => ((p as unknown as { mainScene: THREE.Sce
 // on the TV app (an Android TV box's GPU) start lighter; the renderer adapts its resolution from there
 renderer.setQuality((params.get('q') as Quality) ?? (onTV ? 'low' : 'high'));
 /** the TV: a steady 30 frames a second (every other refresh) buys a sharper picture than a 60 it can't hold */
-const cap = +(params.get('fps') ?? (onTV ? 30 : 0));
+let cap = +(params.get('fps') ?? (onTV ? 30 : 0));
 renderer.cap = cap;
 if (GFX.lite) {
   world.sky.sun.shadow.mapSize.set(1024, 1024);
@@ -294,6 +294,7 @@ function start() {
 const W = window as unknown as Record<string, unknown>;
 W.__cc = { world, renderer, camera, THREE, input, lobby, audio, get game() { return game; }, get crowd() { return crowd; } };
 W.__mute = (on = true) => audio.mute(on);
+W.__cap = (n: number) => { cap = n; renderer.cap = n; };
 if (params.get('mute') === '1') audio.mute(true);
 W.__pump = (n: number, dt = 1 / 60) => {
   cancelAnimationFrame(raf);
