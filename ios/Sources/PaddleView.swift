@@ -68,6 +68,8 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     private let finder = TVFinder()
     private let keepAlive = KeepAlive()
     private let pock = Pock()
+    /// the motion sensors' heading correction (rad), trued to the camera tracking whenever it sees
+    private var yawTrue = 0.0
     @Published var live = false
     @Published var pulse = false
     @Published var text = "Connecting…"
@@ -114,10 +116,32 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
             }
         }
-        motion.onPose = { [weak self] sh, f in
+        motion.onPose = { [weak self] sh0, f0 in
             guard let self, self.live else { return }
-            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f) }
-            else { self.web?.evaluateJavaScript(String(format: "window.__nativeOri && window.__nativeOri({s:[%.3f,%.3f,%.3f],f:[%.3f,%.3f,%.3f]})", sh.x, sh.y, sh.z, f.x, f.y, f.z)) }
+            // the camera tracking holds the room still (no heading drift): when it has the phone,
+            // its angle is the paddle's and the motion sensors' heading is trued to it; through a
+            // fast swing (blurred frames) the motion sensors carry on, trued by the last offset
+            var sh = sh0, f = f0
+            var pos: SIMD3<Double>? = nil
+            if let ar = self.tracker.pose(now: ProcessInfo.processInfo.systemUptime) {
+                let heading = { (a: SIMD3<Double>, b: SIMD3<Double>) -> Double in
+                    let v = a.x * a.x + a.z * a.z > b.x * b.x + b.z * b.z ? a : b
+                    return atan2(v.x, v.z)
+                }
+                var d = heading(ar.face, ar.shaft) - heading(f0, sh0)
+                d = atan2(sin(d), cos(d))
+                self.yawTrue += atan2(sin(d - self.yawTrue), cos(d - self.yawTrue)) * 0.15
+                sh = ar.shaft; f = ar.face; pos = ar.pos
+            } else {
+                let c = cos(self.yawTrue), s = sin(self.yawTrue)
+                let rot = { (v: SIMD3<Double>) in SIMD3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c) }
+                sh = rot(sh0); f = rot(f0)
+            }
+            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f, pos: pos) }
+            else {
+                let p = pos.map { String(format: ",p:[%.3f,%.3f,%.3f]", $0.x, $0.y, $0.z) } ?? ""
+                self.web?.evaluateJavaScript(String(format: "window.__nativeOri && window.__nativeOri({s:[%.3f,%.3f,%.3f],f:[%.3f,%.3f,%.3f]%@})", sh.x, sh.y, sh.z, f.x, f.y, f.z, p))
+            }
         }
         tracker.onPos = { [weak self] x, z, vx, vz in
             guard let self else { return }

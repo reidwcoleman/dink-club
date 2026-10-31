@@ -13,7 +13,7 @@ import type { Input, ShotType, Swing } from './Input.ts';
 import { aiChooseShot, aiServe, AI_LEVELS, type Difficulty, type ShotChoice } from './AI.ts';
 import { CameraDirector } from './CameraDirector.ts';
 import { Replay } from './Replay.ts';
-import { PADDLE_ART } from './Racket.ts';
+import { PADDLE_ART, RACKET } from './Racket.ts';
 import { Puppet, SUN_RAY, type BodyLook } from '../people/Puppet.ts';
 import { GFX } from '../render/gfx.ts';
 import type { World } from '../world/World.ts';
@@ -67,7 +67,7 @@ const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', r
 // the hit window around the ball reaching the paddle (after this player's learned delay): Wii
 // Sports-wide — a swing in it hits; when in it decides where the ball goes, not whether it goes
 const EARLY = 0.42, LATE = 0.26;
-const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fone = new THREE.Vector3(1.25, 1.25, 1.25), _fq = new THREE.Quaternion(), _fq2 = new THREE.Quaternion();
+const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fs2 = new THREE.Vector3(), _fv = new THREE.Vector3(), _fone = new THREE.Vector3(1.25, 1.25, 1.25), _fq = new THREE.Quaternion(), _fq2 = new THREE.Quaternion();
 
 export class Game {
   readonly ball = new BallSim();
@@ -245,8 +245,32 @@ export class Game {
   }
 
   /** a phone's angle (handle → head, screen normal; room frame = the player's right, up, forward) */
-  setPaddleAngle(slot: number, shaft: number[], face: number[]) {
+  setPaddleAngle(slot: number, shaft: number[], face: number[], pos: number[] | null = null) {
     this.players?.[slot]?.rig.setLive(shaft, face);
+    if (pos) this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: performance.now() / 1000 };
+  }
+  /** each phone's position in the room as its camera tracking sees it, unheld through swings (room frame) */
+  private padRoom: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
+  /** the phone's height when the room was last mapped onto the court (it then holds the paddle at ~0.9 m) */
+  private padY0: (number | null)[] = [null, null];
+  /** the paddle's flight (its sweet spot) a beat ago, for the pull onto the ball at contact */
+  private padSnap: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
+
+  /**
+   * Where your paddle is, in the court: the room mapped onto the court as your body is (2.5 m of
+   * court a metre of room), then the paddle's own movement around you — a swing, a reach — about
+   * life size on top. Null without fresh tracking.
+   */
+  private trackedPaddle(p: Player, out: THREE.Vector3): THREE.Vector3 | null {
+    const r = this.padRoom[p.index], a = this.bodyAnchor[p.index], b = this.bodyPos[p.index];
+    if (!r || !a || !b || performance.now() / 1000 - r.t > 0.3) return null;
+    const G = 2.5, s = p.side;
+    // the body's mapping (held through swings) and the hand's motion away from it
+    const bx = a.cx + s * (b.x - a.px) * G, bz = a.cz - s * (b.z - a.pz) * G;
+    const hx = s * (r.x - b.x) * 1.15, hz = -s * (r.z - b.z) * 1.15;
+    const y0 = this.padY0[p.index] ?? (this.padY0[p.index] = r.y);
+    out.set(bx + hx, THREE.MathUtils.clamp(0.9 + (r.y - y0) * 1.15, 0.1, 2.7), bz + hz);
+    return out;
   }
 
   /** this player moves by walking around the room */
@@ -258,7 +282,13 @@ export class Game {
   /** between points the player is put in place: the room position now maps to that spot */
   private anchorBody(p: Player) {
     const b = this.bodyPos[p.index];
-    if (b) this.bodyAnchor[p.index] = { px: b.x, pz: b.z, cx: p.pos.x, cz: p.pos.z };
+    if (!b) return;
+    // paddles only: the phone you hold is the paddle, so its spot maps onto where this player's
+    // paddle meets a ball (their forehand contact point), not onto their feet
+    const off = this.paddlesOnly ? p.right.clone().multiplyScalar(REACH.fhLat).addScaledVector(p.fwd, REACH.ahead) : null;
+    this.bodyAnchor[p.index] = { px: b.x, pz: b.z, cx: p.pos.x + (off?.x ?? 0), cz: p.pos.z + (off?.z ?? 0) };
+    const r = this.padRoom[p.index];
+    if (r) this.padY0[p.index] = r.y;
   }
 
   /** where the room position puts the player on court (a step in the room is ~2.3 on court) */
@@ -271,6 +301,7 @@ export class Game {
     const bx = b.x + b.vx * lead, bz = b.z + b.vz * lead;
     // facing the TV is facing the net: right is the player's right, forward is toward the net
     const t = new THREE.Vector3(a.cx + p.side * (bx - a.px) * G, 0, a.cz - p.side * (bz - a.pz) * G);
+    if (this.paddlesOnly) t.addScaledVector(p.right, -REACH.fhLat).addScaledVector(p.fwd, -REACH.ahead);
     t.x = THREE.MathUtils.clamp(t.x, -FLOOR_HX + 0.4, FLOOR_HX - 0.4);
     return t;
   }
@@ -525,7 +556,8 @@ export class Game {
     this.replay.mark('hit', this.clock, contact.x, contact.z);
     const speed = Math.hypot(v.x, v.y, v.z);
     // the paddle takes the hit: the ball leaves from its face, the face gives in the hand
-    this.ballView.fromPaddle(p.rig.sweetSpot(), contact);
+    if (this.paddlesOnly) this.padSnap[p.index] = { x: contact.x, y: contact.y, z: contact.z, t: this.clock };
+    else this.ballView.fromPaddle(p.rig.sweetSpot(), contact);
     p.rig.impact(Math.min(1, (speed + inSpeed * 0.5) / 22));
     this.ballView.flash(contact, Math.min(1, speed / 22));
     this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position), quality);
@@ -1157,8 +1189,26 @@ export class Game {
     const rk = p.rig.racket;
     rk.updateWorldMatrix(true, false);
     rk.matrixWorld.decompose(_fp, _fq, _fs);
+    // where the sweet spot is: your phone's spot when it's tracked, else where the player carries it
+    const sweet = p.human && this.bodyMode(p) ? this.trackedPaddle(p, _fs2) : null;
+    if (!sweet) p.rig.sweetSpot(_fs2);
     const live = p.rig.liveQuat(_fq2);
-    if (live) _fq.slerp(live, p.rig.inStroke ? 0.65 : 1);
+    if (live) _fq.slerp(live, sweet ? 1 : p.rig.inStroke ? 0.65 : 1);
+    // the hit: the face meets the ball — the last ~0.12 s before a committed strike pull the sweet
+    // spot onto the ball, and it lets go over the ~0.1 s after
+    const c = this.committed[p.index], b = this.ball.p;
+    let pull = 0;
+    if (c && this.clock < c.at + 1e-3) pull = 1 - THREE.MathUtils.smoothstep(c.at - this.clock, 0, 0.12);
+    else if (!p.human && p.plan?.swung) pull = 1 - THREE.MathUtils.smoothstep(p.plan.tContact - this.clock, 0, 0.12);
+    if (pull > 0) _fs2.lerp(_fv.set(b.x, b.y, b.z), pull);
+    const snap = this.padSnap[p.index];
+    if (pull === 0 && snap) {
+      const k = Math.exp(-(this.clock - snap.t) / 0.07);
+      if (k < 0.02) this.padSnap[p.index] = null;
+      else _fs2.lerp(_fv.set(snap.x, snap.y, snap.z), k);
+    }
+    // placed by its sweet spot (turning it doesn't swing the head off the ball)
+    _fp.copy(_fs2).sub(_fv.set(0, RACKET.sweet * _fone.y, 0).applyQuaternion(_fq));
     pad.matrix.compose(_fp, _fq, _fone);
     pad.matrixWorld.copy(pad.matrix);
   }

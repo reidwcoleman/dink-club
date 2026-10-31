@@ -33,6 +33,8 @@ final class RoomTracker: NSObject, ARSessionDelegate {
     private struct Sample { let t: TimeInterval; let p: simd_float3; let n: simd_float3 }
     private var hist: [Sample] = []
     private var fx = OneEuro(), fz = OneEuro()
+    private var px = OneEuro(minCutoff: 3, beta: 1.5), py = OneEuro(minCutoff: 3, beta: 1.5), pz = OneEuro(minCutoff: 3, beta: 1.5)
+    private var latest: (t: TimeInterval, pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>)?
     private var body: (x: Double, z: Double)?
     private var vel = (x: 0.0, z: 0.0)
     private(set) var ok = false
@@ -78,10 +80,24 @@ final class RoomTracker: NSObject, ARSessionDelegate {
             right = simd_float3(-fwd.z, 0, fwd.x)
             body = nil
             fx = OneEuro(); fz = OneEuro()
+            px = OneEuro(minCutoff: 3, beta: 1.5); py = OneEuro(minCutoff: 3, beta: 1.5); pz = OneEuro(minCutoff: 3, beta: 1.5)
         }
         guard let o = origin else { return }
         // the paddle history: position and the screen's outward normal (+z of the camera frame)
         let n = simd_normalize(simd_float3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+        // the paddle now (the phone is the paddle): where it is and how it's turned, in the room
+        // frame, the position through a light One-Euro (it should follow a swing, not lag it)
+        do {
+            let dd = p - o
+            let toRoom = { (v: simd_float3) -> SIMD3<Double> in SIMD3(Double(simd_dot(v, self.right)), Double(v.y), Double(simd_dot(v, self.fwd))) }
+            let rp = toRoom(dd)
+            let pos = SIMD3(px.filter(rp.x, t), py.filter(rp.y, t), pz.filter(rp.z, t))
+            let sh = toRoom(simd_float3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+            let fc = toRoom(simd_float3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+            lock.lock()
+            latest = (t, pos, sh, fc)
+            lock.unlock()
+        }
         lock.lock()
         hist.append(Sample(t: t, p: p, n: n))
         if hist.count > 90 { hist.removeFirst(hist.count - 90) }
@@ -106,6 +122,16 @@ final class RoomTracker: NSObject, ARSessionDelegate {
         lastSent = t
         let v = vel
         DispatchQueue.main.async { self.onPos?(b.x, b.z, v.x, v.z) }
+    }
+
+    /// the phone right now from the camera tracking (position, long edge, screen normal; room
+    /// frame), or nil if tracking has no fresh frame (a fast swing blurs it, the phone is locked)
+    func pose(now: TimeInterval) -> (pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>)? {
+        lock.lock()
+        let l = latest
+        lock.unlock()
+        guard ok, let l, now - l.t < 0.08 else { return nil }
+        return (l.pos, l.shaft, l.face)
     }
 
     /// the paddle around time `t` (CMLogItem / ARFrame clock): velocity and face normal in the room
@@ -137,6 +163,7 @@ final class RoomTracker: NSObject, ARSessionDelegate {
 /// One-Euro filter (Casiez et al.): a low-pass whose cutoff rises with speed — steady when still, no lag when moving
 struct OneEuro {
     var minCutoff = 1.4, beta = 0.6, dCutoff = 1.0
+    init(minCutoff: Double = 1.4, beta: Double = 0.6) { self.minCutoff = minCutoff; self.beta = beta }
     private var x: Double?
     private var dx = 0.0
     private var t: TimeInterval = 0

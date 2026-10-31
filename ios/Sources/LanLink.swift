@@ -109,9 +109,11 @@ final class LanLink {
     }
 
     /// the paddle's angle (lost ones don't matter: the next is 33 ms behind)
-    func sendPose(shaft: SIMD3<Double>, face: SIMD3<Double>) {
+    func sendPose(shaft: SIMD3<Double>, face: SIMD3<Double>, pos: SIMD3<Double>?) {
         let r = { (v: Double) in (v * 1000).rounded() / 1000 }
-        send(["t": "ori", "s": [r(shaft.x), r(shaft.y), r(shaft.z)], "f": [r(face.x), r(face.y), r(face.z)]])
+        var m: [String: Any] = ["t": "ori", "s": [r(shaft.x), r(shaft.y), r(shaft.z)], "f": [r(face.x), r(face.y), r(face.z)]]
+        if let p = pos { m["p"] = [r(p.x), r(p.y), r(p.z)] }
+        send(m)
     }
 
     func sendPos(x: Double, z: Double, vx: Double, vz: Double) {

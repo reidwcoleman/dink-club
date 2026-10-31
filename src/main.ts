@@ -66,7 +66,7 @@ const choice: MenuChoice = {
   format: params.get('format') ?? 'classic11',
   sky: params.get('sky') ?? 'sunset',
   players: params.get('players') ?? '1',
-  move: params.get('move') ?? 'auto',
+  move: params.get('move') ?? 'body',
   view: params.get('view') ?? 'paddles',
 };
 const menu = new Menu(ui, choice);
@@ -94,7 +94,7 @@ lobby.onSwing = (slot, s) => {
   if (summaryEl && game?.match?.winner !== null) rematch();
 };
 lobby.onPos = (slot, x, z, vx, vz) => game?.setBodyPos(slot, x, z, vx, vz);
-lobby.onOri = (slot, sh, f) => game?.setPaddleAngle(slot, sh, f);
+lobby.onOri = (slot, sh, f, pos) => game?.setPaddleAngle(slot, sh, f, pos);
 lobby.onTap = (slot, what) => {
   audio.start();
   if (what === 'start' && !inMatch && !menu.root.classList.contains('busy')) void play(choice);
