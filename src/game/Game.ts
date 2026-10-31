@@ -201,6 +201,11 @@ export class Game {
     this.bodyPos[slot] = { x, z, vx, vz, t: performance.now() / 1000 };
   }
 
+  /** a phone's angle (handle → head, screen normal; room frame = the player's right, up, forward) */
+  setPaddleAngle(slot: number, shaft: number[], face: number[]) {
+    this.players?.[slot]?.rig.setLive(shaft, face);
+  }
+
   /** this player moves by walking around the room */
   bodyMode(p: Player): boolean {
     const b = this.bodyPos[p.index];
@@ -610,8 +615,17 @@ export class Game {
     }
     if (!receiving || !plan || this.dead || c) {
       // a swing at nothing: an air swing (feedback that the phone is live)
-      if (!p.rig.inStroke) p.rig.swing(sw.power < 0.3 ? 'fhDink' : 'fh', 0.18, p.pos.clone().addScaledVector(p.right, 0.6).addScaledVector(p.fwd, 0.4).setY(0.85), p.fwd);
+      if (!p.rig.inStroke) {
+        const bh = (sw.hand ?? 1) < 0;
+        p.rig.swing(sw.power < 0.3 ? (bh ? 'bhDink' : 'fhDink') : bh ? 'bh' : 'fh', 0.18, p.pos.clone().addScaledVector(p.right, bh ? -0.45 : 0.6).addScaledVector(p.fwd, 0.4).setY(0.85), p.fwd, 0.12, sw.power);
+      }
       return;
+    }
+    // the phone says which side it swung on: on a ball near the middle (at the body) either side
+    // reaches, so the player takes it the way you swung
+    if (sw.hand != null && !plan.smash && (sw.hand > 0) !== plan.forehand) {
+      const lat = (plan.ball.x - p.pos.x) * p.right.x + (plan.ball.z - p.pos.z) * p.right.z;
+      if (Math.abs(lat) < 0.3) plan.forehand = sw.hand > 0;
     }
     const err = raw - this.lag[p.index];
     if (err < -EARLY) {
@@ -630,7 +644,11 @@ export class Game {
     const strikeAt = waiting ? this.clock + 0.03 : Math.max(this.clock + 0.05, plan.tContact);
     this.committed[p.index] = { at: strikeAt, err, swing: sw };
     plan.swung = true;
-    p.rig.swing(this.strokeFor(p, plan, type), strikeAt - this.clock, waiting ? this.ballVec() : plan.ball, p.fwd, 0.02);
+    // the stroke the phone made: a chop down is a slice, a brush up a topspin stroke
+    let kind = this.strokeFor(p, plan, type);
+    if (type === 'reset' && !plan.volley && sw.lift > -0.15) kind = plan.forehand ? 'fh' : 'bh';
+    if (type === 'drive' && !plan.volley && sw.lift < -0.4) kind = plan.forehand ? 'fhSlice' : 'bhSlice';
+    p.rig.swing(kind, strikeAt - this.clock, waiting ? this.ballVec() : plan.ball, p.fwd, 0.02, sw.power);
   }
 
   /**
@@ -679,13 +697,15 @@ export class Game {
       const lead = plan.volley ? 0.42 : plan.smash ? 0.6 : 0.62;
       if (!plan.swung && tTo <= lead && tTo > 0.06) {
         plan.swung = true;
-        p.rig.swing(this.strokeFor(p, plan, type), tTo, plan.ball, p.fwd);
+        p.rig.swing(this.strokeFor(p, plan, type), tTo, plan.ball, p.fwd, 0.12, p.shot?.power ?? 0.5);
       }
       if (tTo > 0) return;
     } else {
       // the human gets ready on their own (a backswing held until they swing)
       if (!plan.swung && !c && tTo <= 0.7 && tTo > 0.05) {
         p.rig.swing(this.strokeFor(p, plan, 'reset'), 6, plan.ball, p.fwd);
+        // the body turns for it; the paddle itself is wherever the phone is
+        p.rig.holding = true;
         plan.swung = true;
       }
       if (!c && tTo <= 0 && !plan.waited && !this.dead) {

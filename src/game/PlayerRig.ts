@@ -242,12 +242,53 @@ export class PlayerRig {
     this.racket.quaternion.copy(this.gripLocal.quat);
   }
 
+  /**
+   * The phone's paddle, live: its long edge (handle → head) and its screen normal in the player's
+   * frame (right, up, forward), ~30 a second. Between strokes, and while a stroke is only being
+   * prepared, the player's paddle is held at that angle: tilt the phone and the paddle tilts, take
+   * it back and the paddle goes back.
+   */
+  setLive(shaft: number[], face: number[]) {
+    const sh = new THREE.Vector3(shaft[0], shaft[1], shaft[2]);
+    const f = new THREE.Vector3(face[0], face[1], face[2]);
+    if (sh.lengthSq() < 0.25 || f.lengthSq() < 0.25) return;
+    this.liveIn = { shaft: sh.normalize(), face: f.normalize() };
+    this.liveAt = this.clock;
+  }
+  /** a human's stroke being prepared (held until their swing lands): the arm follows the phone */
+  holding = false;
+  /** how hard the current stroke is (0…1) */
+  private power = 0.5;
+  private liveIn: { shaft: THREE.Vector3; face: THREE.Vector3 } | null = null;
+  private liveAt = -9;
+  private liveShaft = new THREE.Vector3(-0.1, 0.45, 0.88).normalize();
+  private liveFace = new THREE.Vector3(-1, 0, 0);
+  private liveW = 0;
+  /** the arm's key when a stroke took over from the live paddle, blended out over its first moments */
+  private liveFrom: Key | null = null;
+  private liveFromT = 0;
+
+  /** the ready key at the phone's angle: the hand stays in front of the body, shifted the way the paddle points */
+  private liveKey(): Key {
+    const s = this.liveShaft, f = this.liveFace;
+    const L = RACKET.sweet - RACKET.grip;
+    const hand: L3 = [0.2 + s.x * 0.22, 1.0 + s.y * 0.12, 0.3 + s.z * 0.16];
+    const head: L3 = [hand[0] + s.x * L, Math.max(0.3, hand[1] + s.y * L), hand[2] + s.z * L];
+    return { ...READY, head, shaft: [s.x, s.y, s.z], face: [f.x, f.y, f.z], off: 'throat' };
+  }
+
   /** start a stroke: its contact at time tContact (s from now), meeting the ball at `contact` (world), sending it along aimYaw */
-  swing(kind: StrokeKind, tContact: number, contact: THREE.Vector3, aimDir?: THREE.Vector3, minLead = 0.12) {
+  swing(kind: StrokeKind, tContact: number, contact: THREE.Vector3, aimDir?: THREE.Vector3, minLead = 0.12, power = 0.5) {
+    // out of the live paddle: the stroke starts from where the phone held it
+    if (this.liveW > 0.3) { this.liveFrom = this.liveKey(); this.liveFromT = this.clock; }
+    this.holding = false;
     this.stroke = kind;
     const now = this.clock;
-    const fwdDur = kind === 'serve' ? 0.26 : kind === 'smash' ? 0.26 : kind.includes('Volley') ? 0.12 : kind.includes('Dink') ? 0.16 : 0.2;
-    const follow = kind === 'serve' ? 0.55 : kind.includes('Volley') ? 0.3 : kind.includes('Dink') ? 0.35 : 0.45;
+    // a harder swing is a quicker forward swing, a longer follow-through and more body through it
+    this.power = Math.max(0, Math.min(1, power));
+    const ground = kind !== 'serve' && kind !== 'smash' && !kind.includes('Volley') && !kind.includes('Dink');
+    const fwdDur = (kind === 'serve' ? 0.26 : kind === 'smash' ? 0.26 : kind.includes('Volley') ? 0.12 : kind.includes('Dink') ? 0.16 : 0.2) * (ground ? 1.2 - 0.4 * this.power : 1);
+    const follow = (kind === 'serve' ? 0.55 : kind.includes('Volley') ? 0.3 : kind.includes('Dink') ? 0.35 : 0.45) * (ground ? 0.8 + 0.4 * this.power : 1);
     const tC = now + Math.max(minLead, tContact);
     this.strokeTimeline = { tStart: now, tFwd: tC - fwdDur, tContact: tC, tEnd: tC + follow };
     this.setContact(contact);
@@ -394,9 +435,26 @@ export class PlayerRig {
     // ---------------- keyed pose
     const k = this.stroke ? this.sample(this.stroke, this.strokeT) : READY;
     keyPose = k;
+    // the live paddle: fresh phone angles, smoothed, held between strokes and through a held prep
+    const fresh = this.liveIn !== null && this.clock - this.liveAt < 0.4;
+    if (fresh) {
+      const a = Math.min(1, dt / 0.05);
+      this.liveShaft.lerp(this.liveIn!.shaft, a).normalize();
+      this.liveFace.lerp(this.liveIn!.face, a).normalize();
+    }
+    const liveWant = fresh && (!this.stroke || this.holding) ? 1 : 0;
+    this.liveW += (liveWant - this.liveW) * Math.min(1, dt / 0.1);
+    if (this.liveW > 0.01) keyPose = mixKey(keyPose, this.liveKey(), this.liveW);
+    else if (this.liveFrom && this.stroke) {
+      const u = (this.clock - this.liveFromT) / 0.14;
+      if (u < 1) keyPose = mixKey(this.liveFrom, keyPose, smooth(u));
+      else this.liveFrom = null;
+    }
     const sw = smooth(this.strokeW);
-    const chest = lerp(READY.chest, k.chest, sw) * stance + 0;
-    const hips = lerp(READY.hips, k.hips, sw) * stance;
+    // through and after the hit the body turns as hard as the swing was
+    const drive = this.stroke ? 1 + (0.5 * this.power - 0.25) * smooth(Math.min(1, Math.max(0, (this.strokeT - 0.42) / 0.14))) : 1;
+    const chest = lerp(READY.chest, k.chest * drive, sw) * stance + 0;
+    const hips = lerp(READY.hips, k.hips * drive, sw) * stance;
     // a low ball: get down to it (knees and a hinge at the hips), most at the moment of contact
     const lowK = this.stroke ? Math.max(0, 0.82 - this.contactLocal.y) * sw * Math.exp(-(((this.strokeT - CONTACT) / 0.3) ** 2)) : 0;
     const lean = lerp(READY.lean, k.lean, sw) * stance + this.runW * 8 + lowK * 40;
@@ -446,7 +504,7 @@ export class PlayerRig {
     root.updateMatrixWorld(true);
     this.updateFeet(dt, rootYaw, stance, knee, speed);
     // ---------------- arms
-    this.poseArms(keyPose, sw, stance, rootYaw);
+    this.poseArms(keyPose, Math.max(sw, this.liveW), stance, rootYaw);
     // ---------------- head: look at the ball
     const head = b.Bip01_Head, neck = b.Bip01_Neck;
     const hp = head.getWorldPosition(_w);
@@ -608,6 +666,7 @@ export class PlayerRig {
       const dl = new THREE.Vector3(this.contactLocal.x - kc.head[0], this.contactLocal.y - kc.head[1], this.contactLocal.z - kc.head[2]);
       const bell = Math.exp(-(((this.strokeT - CONTACT) / 0.22) ** 2));
       const off = toWorld([dl.x * (0.25 + 0.75 * bell), dl.y * (0.3 + 0.7 * bell), dl.z * (0.25 + 0.75 * bell)], new THREE.Vector3(), false);
+      off.multiplyScalar(1 - this.liveW);
       head.add(off);
     }
     let shaft = toWorld(k.shaft, new THREE.Vector3(), false).normalize();
@@ -721,6 +780,12 @@ export function solveTwoBone(upper: THREE.Bone, lower: THREE.Bone, end: THREE.Bo
   aim(lower, W2, S.clone().addScaledVector(dir, dist));
 }
 
+/** blend two keys (positions lerped, directions nlerped); the off hand and timing from b */
+function mixKey(a: Key, b: Key, u: number): Key {
+  const l = (x: L3, y: L3): L3 => [x[0] + (y[0] - x[0]) * u, x[1] + (y[1] - x[1]) * u, x[2] + (y[2] - x[2]) * u];
+  const n = (x: L3, y: L3): L3 => { const v = l(x, y), m = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; };
+  return { ...b, head: l(a.head, b.head), shaft: n(a.shaft, b.shaft), face: n(a.face, b.face), pole: u < 0.5 ? a.pole : b.pole };
+}
 const smooth = (x: number) => {
   const t = Math.min(1, Math.max(0, x));
   return t * t * (3 - 2 * t);

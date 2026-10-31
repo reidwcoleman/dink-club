@@ -102,12 +102,18 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 if let v = s.vel, let n = s.n {
                     extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
                 }
+                if let h = s.side { extra += ",hand:\(h)" }
                 let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
                                 s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
                 self.web?.evaluateJavaScript(js)
             }
             self.pulse = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
+        }
+        motion.onPose = { [weak self] sh, f in
+            guard let self, self.live else { return }
+            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f) }
+            else { self.web?.evaluateJavaScript(String(format: "window.__nativeOri && window.__nativeOri({s:[%.3f,%.3f,%.3f],f:[%.3f,%.3f,%.3f]})", sh.x, sh.y, sh.z, f.x, f.y, f.z)) }
         }
         tracker.onPos = { [weak self] x, z, vx, vz in
             guard let self else { return }
@@ -262,6 +268,8 @@ struct Swing {
     var n: SIMD3<Double>? = nil
     /// the hand's own part of `vel` (without the head's turn about it)
     var hand = SIMD3<Double>(0, 0, 0)
+    /// which way the phone turned about the vertical through the swing: +1 forehand, −1 backhand (right-handed)
+    var side: Int? = nil
     func ago() -> Double { max(0, ProcessInfo.processInfo.systemUptime - t) }
     func with(lift: Double? = nil, power: Double? = nil, aim: Double? = nil) -> Swing {
         var s = self
@@ -291,6 +299,11 @@ struct Swing {
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
+    /// the phone's angle ~30 a second: long edge (handle → head) and screen normal, room frame
+    var onPose: ((SIMD3<Double>, SIMD3<Double>) -> Void)?
+    private var lastPose: TimeInterval = 0
+    /// turn about the vertical through the current swing (rad, + = counterclockwise from above)
+    private var yawTurn = 0.0
     private let mm = CMMotionManager()
     private let queue = OperationQueue()
     private var swinging = false
@@ -353,6 +366,11 @@ final class SwingDetector {
         let right = simd_cross(fwd, up)
         let room = { (v: SIMD3<Double>) -> SIMD3<Double> in SIMD3(simd_dot(v, right), simd_dot(v, up), simd_dot(v, fwd)) }
         let w = SIMD3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z)
+        if t - lastPose > 1.0 / 30 {
+            lastPose = t
+            let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1))
+            DispatchQueue.main.async { self.onPose?(sh, fc) }
+        }
         let g = simd_length(w) * 180 / .pi
         if g > 140 { lastFast = t }
         // the hand: user acceleration integrated, leaking away between swings (it only has to hold a swing)
@@ -366,8 +384,9 @@ final class SwingDetector {
             // a full swing turns the phone fast; a dink or a block barely turns it but pushes the
             // paddle toward the net
             let soft = g > 60 && spNow > 1.1 && vHead.z > 0.7
-            if (g > start0 || soft) && t > cool { swinging = true } else { return }
+            if (g > start0 || soft) && t > cool { swinging = true; yawTurn = 0 } else { return }
         }
+        yawTurn += simd_dot(w, up) * dt
         // how much swing there is: turn rate and head speed together, so soft pushes peak too
         let e = g / 500 + spNow / 4
         samples.append(S(t: t, g: g, e: e, v: vHead, h: vHand, n: room(SIMD3(0, 0, 1))))
@@ -400,7 +419,8 @@ final class SwingDetector {
                       lift: sp > 0.5 ? max(-1, min(1, v.y / sp * 1.8)) : 0,
                       face: pk.n.y,
                       aim: abs(nf.z) > 0.2 ? max(-1.6, min(1.6, atan2(nf.x, nf.z) / (40 * .pi / 180))) : nil,
-                      peak: gPeak, t: tPeak, vel: v, n: nf, hand: pk.h)
+                      peak: gPeak, t: tPeak, vel: v, n: nf, hand: pk.h,
+                      side: yawTurn > 0.35 ? 1 : yawTurn < -0.35 ? -1 : nil)
         vHand = .zero
         DispatchQueue.main.async { self.onSwing?(s) }
     }

@@ -25,6 +25,8 @@ export interface Swing {
   vel?: number[] | null;
   /** the hitting face's normal in the room frame */
   n?: number[] | null;
+  /** which way the phone turned through the swing: +1 a forehand, −1 a backhand (right-handed), null unsure */
+  hand?: number | null;
 }
 
 export class Input {

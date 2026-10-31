@@ -13,10 +13,12 @@ const LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 /** phone → TV */
 export type PadMsg =
   | { t: 'hello'; id: string; name: string; paddle: number }
-  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null; vel?: number[] | null; n?: number[] | null }
+  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null; vel?: number[] | null; n?: number[] | null; hand?: number | null }
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
   /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
   | { t: 'pos'; x: number; z: number; vx?: number; vz?: number }
+  /** the phone's angle, ~30 a second: its long edge (handle → head) and its screen normal, room frame */
+  | { t: 'ori'; s: number[]; f: number[] }
   | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
@@ -49,9 +51,10 @@ export class Lobby {
   peer: Peer | null = null;
   readonly slots: (Slot | null)[] = [null, null];
   status: 'connecting' | 'ready' | 'offline' = 'connecting';
-  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null }) => void) | null = null;
+  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null; hand: number | null }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
   onPos: ((slot: number, x: number, z: number, vx: number, vz: number) => void) | null = null;
+  onOri: ((slot: number, shaft: number[], face: number[]) => void) | null = null;
   onChange: (() => void) | null = null;
   private pingK = 0;
 
@@ -181,6 +184,11 @@ export class Lobby {
         if (Number.isFinite(m.x) && Number.isFinite(m.z)) this.onPos?.(slot, c(m.x, 20), c(m.z, 20), c(m.vx, 6), c(m.vz, 6));
         return;
       }
+      if (m.t === 'ori') {
+        const sv = vec3(m.s), fv = vec3(m.f);
+        if (sv && fv) this.onOri?.(slot, sv, fv);
+        return;
+      }
       if (m.t === 'swing') {
         // when it peaked, on the TV's clock: from the phone's own timestamp and the synced offset
         // (falls back to arrival − half the round trip − how long the phone took to confirm the peak)
@@ -190,7 +198,7 @@ export class Lobby {
           const synced = m.tp - off;
           if (synced <= now + 0.02 && synced > now - 0.4) at = synced;
         }
-        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null, vel: vec3(m.vel), n: vec3(m.n) });
+        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null, vel: vec3(m.vel), n: vec3(m.n), hand: m.hand === 1 || m.hand === -1 ? m.hand : null });
       }
       else if (m.t === 'tap') this.onTap?.(slot, m.what);
       else if (m.t === 'pong') {
