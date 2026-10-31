@@ -162,10 +162,16 @@ export class Renderer {
     if (now - this.lastAdapt < 1.5 || this.frameTimes.length < 60) return;
     this.lastAdapt = now;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
-    const p80 = sorted[Math.floor(sorted.length * 0.8)];
+    const p80 = sorted[Math.floor(sorted.length * 0.8)], p95 = sorted[Math.floor(sorted.length * 0.95)];
     let s = this.scale;
-    // capped (the TV: a steady 30): drop when frames slip to the next refresh, climb while they don't
-    const [down, up] = this.cap ? [1 / (this.cap * 0.82), 1 / (this.cap * 0.94)] : this.lite ? [1 / 40, 1 / 50] : [1 / 52, 1 / 58.5];
+    if (this.cap) {
+      // held to a cap: climb only while (nearly) every frame makes it, back off as soon as a fifth slip
+      if (p80 > 1.18 / this.cap) s = Math.max(this.minScale, s - 0.05);
+      else if (p95 < 1.06 / this.cap) s = Math.min(this.maxScale, s + 0.025);
+      if (Math.abs(s - this.scale) > 0.001) { this.scale = s; this.resize(); }
+      return;
+    }
+    const [down, up] = this.lite ? [1 / 40, 1 / 50] : [1 / 52, 1 / 58.5];
     if (p80 > down) s = Math.max(this.minScale, s - 0.05);
     else if (p80 < up) s = Math.min(this.maxScale, s + 0.03);
     if (Math.abs(s - this.scale) > 0.001) {
@@ -204,7 +210,7 @@ export class Renderer {
     if (on) {
       this.adaptive = true;
       // held to 30 the TV can afford a much sharper frame (it's upscaled to 1080p by the TV either way)
-      if (this.cap && this.cap <= 30) { this.minScale = 0.6; this.maxScale = 1.25; this.scale = 0.95; }
+      if (this.cap && this.cap <= 30) { this.minScale = 0.6; this.maxScale = 1.1; this.scale = 0.9; }
       else { this.minScale = 0.5; this.maxScale = 0.85; this.scale = 0.68; }
       this.resize();
     }
