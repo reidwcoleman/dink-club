@@ -87,6 +87,17 @@ export class HUD {
   }
 
   /** the running shot count in a long rally (0 hides it) */
+  /** the breeze: mph and where it blows on screen (0 = away from the near end, + = to the right) */
+  private windEl: HTMLElement | null = null;
+  wind(mph: number, screenAngle: number) {
+    if (!this.windEl) {
+      this.windEl = el('div', 'wind');
+      this.root.appendChild(this.windEl);
+    }
+    this.windEl.classList.toggle('on', mph >= 1);
+    this.windEl.innerHTML = `<svg viewBox="0 0 20 20" style="transform:rotate(${screenAngle.toFixed(2)}rad)"><path d="M10 2 L15 9 H11.6 V18 H8.4 V9 H5 Z" fill="currentColor"/></svg><span>WIND <b>${mph}</b> mph</span>`;
+  }
+
   rally(n: number) {
     this.rallyEl.classList.toggle('on', n > 0);
     if (n > 0) {

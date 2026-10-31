@@ -480,7 +480,7 @@ export class PlayerRig {
     }
     root.rotation.set(0, rootYaw, 0);
     h.inner.position.set(0, 0, 0);
-    root.updateMatrixWorld(true);
+    root.updateWorldMatrix(true, false);
     // stance height: knees bent lower the hips
     this.lungeW += ((this.clock < this.lungeUntil ? 1 : 0) - this.lungeW) * Math.min(1, dt * (this.clock < this.lungeUntil ? 9 : 4));
     const drop = stance * (0.05 + knee * 0.12 + this.lungeW * 0.16 + lowK * 0.38);
@@ -492,7 +492,7 @@ export class PlayerRig {
       bone.getWorldQuaternion(_q);
       _q2.setFromAxisAngle(axis, ang).multiply(_q);
       setWorldQuat(bone, _q2);
-      bone.updateMatrixWorld(true);
+      bone.updateWorldMatrix(true, false);
     };
     const rightAxis = new THREE.Vector3(-Math.cos(rootYaw), 0, Math.sin(rootYaw));
     // (the facing's right is (−cos, 0, sin)… as a yaw-0 person facing +z has their right at −x)
@@ -524,7 +524,7 @@ export class PlayerRig {
     }
     // ---------------- legs
     h.inner.position.y = -drop + this.hop + lift;
-    root.updateMatrixWorld(true);
+    root.updateWorldMatrix(true, false);
     this.updateFeet(dt, rootYaw, stance, knee, speed);
     // ---------------- arms
     this.poseArms(keyPose, Math.max(sw, this.liveW), stance, rootYaw);
@@ -630,13 +630,13 @@ export class PlayerRig {
       const rq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rootYaw + f.side * -0.18 - heel * f.side * 0.35);
       if (heel > 0) rq.premultiply(new THREE.Quaternion().setFromAxisAngle(right, -heel * 0.6));
       setWorldQuat(f.bone, rq.multiply(rel));
-      f.bone.updateMatrixWorld(true);
+      f.bone.updateWorldMatrix(true, true);
       // blend with the clip by stance
       if (stance < 0.999) {
         f.thigh.quaternion.slerpQuaternions(thighQ, f.thigh.quaternion.clone(), stance);
         f.calf.quaternion.slerpQuaternions(calfQ, f.calf.quaternion.clone(), stance);
         f.bone.quaternion.slerpQuaternions(footQ, f.bone.quaternion.clone(), stance);
-        f.thigh.updateMatrixWorld(true);
+        f.thigh.updateWorldMatrix(true, true);
       }
     }
     void root;
@@ -726,19 +726,19 @@ export class PlayerRig {
     const pole = k.pole ? toWorld(k.pole, new THREE.Vector3(), false) : right.clone().multiplyScalar(0.3).add(new THREE.Vector3(0, -1, 0)).addScaledVector(fwd, -0.2);
     solveTwoBone(ua, fa, hand, wrist, ua.getWorldPosition(new THREE.Vector3()).add(pole));
     setWorldQuat(hand, Hq);
-    hand.updateMatrixWorld(true);
+    hand.updateWorldMatrix(true, true);
     if (armW < 0.999) {
       ua.quaternion.slerpQuaternions(saved[0], ua.quaternion.clone(), armW);
       fa.quaternion.slerpQuaternions(saved[1], fa.quaternion.clone(), armW);
       hand.quaternion.slerpQuaternions(saved[2], hand.quaternion.clone(), armW);
-      ua.updateMatrixWorld(true);
+      ua.updateWorldMatrix(true, true);
     }
     // ---- the other hand
     const lua = b.Bip01_L_UpperArm, lfa = b.Bip01_L_Forearm, lh = b.Bip01_L_Hand;
     const lsaved = [lua.quaternion.clone(), lfa.quaternion.clone(), lh.quaternion.clone()];
     let target: THREE.Vector3;
     const racketPoint = (y: number) => this.racket.localToWorld(new THREE.Vector3(0, y, 0));
-    this.racket.updateMatrixWorld(true);
+    this.racket.updateWorldMatrix(true, true);
     if (k.off === 'throat') target = racketPoint(RACKET.throat).addScaledVector(fwd, -0.04);
     else if (k.off === 'grip') target = racketPoint(RACKET.twoHand).addScaledVector(fwd, -0.02);
     else if (k.off === 'ball') target = toWorld([0.02, 0.92, 0.48], new THREE.Vector3(), true);
@@ -751,7 +751,7 @@ export class PlayerRig {
       lfa.quaternion.slerpQuaternions(lsaved[1], lfa.quaternion.clone(), lw);
       lh.quaternion.slerpQuaternions(lsaved[2], lh.quaternion.clone(), lw);
     }
-    lua.updateMatrixWorld(true);
+    lua.updateWorldMatrix(true, true);
     lh.getWorldPosition(this.offHand);
     void root;
   }
@@ -763,7 +763,7 @@ export class PlayerRig {
 
   /** the racket's sweet spot in the world (for hit effects) */
   sweetSpot(out = new THREE.Vector3()): THREE.Vector3 {
-    this.racket.updateMatrixWorld(true);
+    this.racket.updateWorldMatrix(true, true);
     return this.racket.localToWorld(out.set(0, RACKET.sweet, 0));
   }
 
@@ -787,7 +787,7 @@ function aim(bone: THREE.Object3D, from: THREE.Vector3, to: THREE.Vector3) {
   const dq = new THREE.Quaternion().setFromUnitVectors(a.normalize(), c.normalize());
   const wq = bone.getWorldQuaternion(new THREE.Quaternion());
   setWorldQuat(bone, dq.multiply(wq));
-  bone.updateMatrixWorld(true);
+  bone.updateWorldMatrix(true, false);
 }
 
 /** two-bone IK: upper/lower/end bones reach `target`, the middle joint bending toward `pole` (a world point) */

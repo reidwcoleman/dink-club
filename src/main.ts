@@ -121,6 +121,7 @@ async function boot() {
   game.onStatus = (slot, text, sub, serve) => lobby.send(slot, { t: 'state', text, sub, serve, score: game?.match ? `${game.match.score[slot]}-${game.match.score[1 - slot]}` : '' });
   game.dir.cut('intro');
   world.finalize();
+  world.freeze(crowd ? [crowd.mesh] : []);
   renderer.enableAO(world.scene);
   menu.setStatus('');
   menu.busy(false);
@@ -187,7 +188,7 @@ async function play(c: MenuChoice, demo = false) {
   let far = (near + 1 + Math.floor(Math.random() * (ROSTER.length - 1))) % ROSTER.length;
   if (far === near) far = (near + 1) % ROSTER.length;
   const names: [string, string] = [lobby.name(0) ?? (demo ? ROSTER[near].name : 'You'), two ? lobby.name(1) ?? 'Player 2' : ROSTER[far].name];
-  await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo, move: c.move === 'body' ? 'body' : 'auto' }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
+  await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo, move: c.move === 'body' ? 'body' : 'auto', wind: params.get('wind') !== null ? +params.get('wind')! : 1 }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
   world.scene.environment = null;
   world.sky.captureEnv(world.dynamic);
   if (GFX.lite) { textureDiet(); if (params.get('bake') !== '0') { const t0 = performance.now(); world.bakeFloor(); console.log(`[bake] floor ${Math.round(performance.now() - t0)} ms`); } renderer.refreshShadows(); }

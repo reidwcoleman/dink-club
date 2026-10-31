@@ -396,11 +396,12 @@ export class Human {
   /** bring the lowest foot to the floor (never lifted: a jump stays a jump) */
   ground(allowLift = false) {
     this.inner.position.y = 0;
-    this.root.updateMatrixWorld(true);
+    // (world queries refresh their own chain; the full pass comes once the pose is done)
+    this.root.updateWorldMatrix(true, false);
     if (!this.grounded || !this.feet.length) return;
     const lift = this.lowestFoot() - this.inner.getWorldPosition(this.v).y - this.restFoot;
     if (lift > 0.004 || allowLift) this.inner.position.y = -lift;
-    this.root.updateMatrixWorld(true);
+    this.root.updateWorldMatrix(true, false);
   }
 
   private v = new THREE.Vector3();

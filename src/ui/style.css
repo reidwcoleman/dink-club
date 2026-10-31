@@ -81,6 +81,10 @@ button { font: inherit; cursor: pointer; }
 /* ------------------------------------------------------------------ hud */
 .hud { position: absolute; inset: 0; }
 .bug { position: absolute; top: 28px; left: 32px; min-width: 300px; background: var(--glass2); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-radius: 18px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35); }
+.wind { position: absolute; top: 28px; left: 344px; display: none; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--glass2); border: 1px solid var(--line); font-size: 12px; letter-spacing: 0.14em; font-weight: 800; color: var(--ink2); }
+.wind.on { display: flex; }
+.wind b { font-family: var(--display); font-size: 17px; letter-spacing: 0; color: var(--ink); }
+.wind svg { width: 18px; height: 18px; color: #9fd8ff; transition: transform 0.6s; }
 .bug-tag { font-size: 11px; letter-spacing: 0.16em; font-weight: 800; color: var(--ink3); padding: 9px 16px 4px; }
 .bug .row { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 20px; font-weight: 700; }
 .bug .row + .row { border-top: 1px solid var(--line); }

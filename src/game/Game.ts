@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BallSim, predict, type BallEvent, v3 } from '../sim/Ball.ts';
+import { BallSim, predict, WIND, type BallEvent, v3 } from '../sim/Ball.ts';
 import { solveShot, flyToGround, type ShotSpec } from '../sim/Shot.ts';
 import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
@@ -55,6 +55,8 @@ export interface GameConfig {
   near: number;
   far: number;
   demo?: boolean;
+  /** how breezy (1 = a typical outdoor day, 0 = still air) */
+  wind?: number;
 }
 
 const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', reset: 'groundstroke', drive: 'drive', lob: 'lob', smash: 'overhead', serve: 'serve' };
@@ -137,8 +139,17 @@ export class Game {
     this.ball.surface = world.venue.surface;
   }
 
+  /** this match's breeze: mean speed (m/s) and the direction it blows toward (rad, from +x toward +z) */
+  wind = { speed: 0, dir: 0 };
+  private windT = 0;
+  private windShown = -1;
+
   async setup(cfg: GameConfig, names: [string, string], paddles: [number, number]) {
     this.cfg = cfg;
+    // outdoors there's nearly always some air: calm to breezy by day, stiller at night
+    const k = cfg.wind ?? 1;
+    this.wind = { speed: k * (this.world.sky.preset.night ? 0.2 + Math.random() * 0.8 : 0.4 + Math.random() * 2.4), dir: Math.random() * Math.PI * 2 };
+    this.windT = Math.random() * 100;
     if (this.players) for (const p of this.players) {
       this.world.scene.remove(p.rig.group);
       if (p.puppet) this.world.scene.remove(p.puppet.root, p.puppet.paddle);
@@ -199,6 +210,25 @@ export class Game {
   /** a phone's position in the room (the app's camera tracking) */
   setBodyPos(slot: number, x: number, z: number, vx = 0, vz = 0) {
     this.bodyPos[slot] = { x, z, vx, vz, t: performance.now() / 1000 };
+  }
+
+  /**
+   * The breeze gusts and veers slowly (tens of seconds), so a ball in flight meets the air it was
+   * hit into; the palms and the scorebug show it
+   */
+  private blow(dt: number) {
+    this.windT += dt;
+    const t = this.windT, w = this.wind;
+    const g = Math.max(0, 1 + 0.32 * Math.sin(t * 0.23) + 0.16 * Math.sin(t * 0.71 + 1.3));
+    const d = w.dir + 0.3 * Math.sin(t * 0.11 + 0.7);
+    WIND.x = w.speed * g * Math.cos(d);
+    WIND.z = w.speed * g * Math.sin(d);
+    this.world.club.setWind(WIND.x, WIND.z);
+    const mph = Math.round(Math.hypot(WIND.x, WIND.z) * 2.237);
+    if (mph !== this.windShown) {
+      this.windShown = mph;
+      this.hud.wind(mph, Math.atan2(WIND.x, -WIND.z));
+    }
   }
 
   /** a phone's angle (handle → head, screen normal; room frame = the player's right, up, forward) */
@@ -324,6 +354,7 @@ export class Game {
     }
     this.clock += dt;
     this.stateT += dt;
+    this.blow(dt);
     if (this.state === 'replay') {
       this.replayTick(dt);
       this.hud.update(dt);

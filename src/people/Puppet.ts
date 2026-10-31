@@ -434,7 +434,7 @@ export class Puppet {
     const E2 = fo.getWorldPosition(_e), H2 = hd.getWorldPosition(_h);
     turnTo(fo, E2, H2, target);
     setWorldQuat(hd, qHand);
-    hd.updateMatrixWorld(true);
+    hd.updateWorldMatrix(true, true);
   }
 
   /** copy the Rocketbox pose onto the body (call after the rig / a replay frame has posed it) */
@@ -451,12 +451,15 @@ export class Puppet {
     this.hips.parent!.worldToLocal(pw);
     this.hips.position.copy(pw);
     for (const p of this.pairs) {
-      p.s.getWorldQuaternion(_q);
+      // (the source skeleton is fresh from the update above: read it as it stands)
+      p.s.matrixWorld.decompose(_dp, _q, _ds);
       _q.multiply(p.sBindInv).multiply(p.tAligned);
       // to local: parent's world rotation⁻¹ · wanted world rotation
       p.t.parent!.getWorldQuaternion(_q2).invert();
       p.t.quaternion.copy(_q2.multiply(_q));
-      p.t.updateMatrixWorld(true);
+      // just this bone: the next one's parent query refreshes its own chain, and the scene's
+      // pass before drawing refreshes the rest (a subtree update per bone was most of the cost)
+      p.t.updateWorldMatrix(false, false);
     }
     // the arm reaches for the game's paddle: this body's arms aren't the rig's length
     this.reachPaddle();
@@ -500,6 +503,7 @@ function mergeTwo(a: THREE.BufferGeometry, b: THREE.BufferGeometry): THREE.Buffe
 
 const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion(), _ps = new THREE.Vector3(), _qh = new THREE.Quaternion(), _gi = new THREE.Quaternion();
 const _tg = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Vector3(), _h = new THREE.Vector3(), _d = new THREE.Vector3(), _pole = new THREE.Vector3(), _el = new THREE.Vector3();
+const _dp = new THREE.Vector3(), _ds = new THREE.Vector3();
 const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3(), _tq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
 /** turn a bone (about its own origin `o`) so its child at `from` swings onto `to` */
 function turnTo(bone: THREE.Object3D, o: THREE.Vector3, from: THREE.Vector3, to: THREE.Vector3) {
@@ -509,7 +513,7 @@ function turnTo(bone: THREE.Object3D, o: THREE.Vector3, from: THREE.Vector3, to:
   _tq.setFromUnitVectors(_a1, _a2);
   bone.getWorldQuaternion(_wq);
   setWorldQuat(bone, _tq.multiply(_wq));
-  bone.updateMatrixWorld(true);
+  bone.updateWorldMatrix(true, false);
 }
 
 function setWorldQuat(o: THREE.Object3D, q: THREE.Quaternion) {

@@ -1,5 +1,5 @@
 import { BALL_R, netTop, type Surface } from './dims.ts';
-import { spinFor, KL, dragK, spinKeep, type V3, v3 } from './Ball.ts';
+import { spinFor, accel, spinKeep, type V3, v3 } from './Ball.ts';
 
 /**
  * The shot solver: which launch velocity lands a ball struck at p0 with this pace and spin
@@ -40,20 +40,12 @@ export function flyToGround(p0: V3, v0: V3, w0: V3, dt = 1 / 240, tMax = 5): { x
   let netY = Infinity, netX = 0;
   let t = 0;
   let sx = wx, sy = wy, sz = wz;
+  const vv = v3(), ww = v3();
   while (t < tMax) {
     const s = Math.hypot(vx, vy, vz);
-    const ws = Math.hypot(sx, sy, sz);
-    const kd = dragK(s, ws);
-    let ax = -kd * s * vx, ay = -kd * s * vy - 9.81, az = -kd * s * vz;
-    if (ws > 1e-3) {
-      const cl = 1 / (2 + s / (BALL_R * ws));
-      let cx = sy * vz - sz * vy, cy = sz * vx - sx * vz, cz = sx * vy - sy * vx;
-      const cn = Math.hypot(cx, cy, cz);
-      if (cn > 1e-9) {
-        const m = (KL * cl * s * s) / cn;
-        ax += cx * m; ay += cy * m; az += cz * m;
-      }
-    }
+    vv.x = vx; vv.y = vy; vv.z = vz; ww.x = sx; ww.y = sy; ww.z = sz;
+    const a = accel(vv, ww);
+    const ax = a.x, ay = a.y, az = a.z;
     vx += ax * dt; vy += ay * dt; vz += az * dt;
     const opz = pz, opy = py, opx = px;
     px += vx * dt; py += vy * dt; pz += vz * dt;
@@ -90,10 +82,10 @@ export function solveShot(p0: V3, target: { x: number; z: number }, spec: ShotSp
     if (ok) return sol;
     if (!best || sol.netClear > best.netClear) best = sol;
     if (spec.commit) return sol;
-    // into the net or can't get there: ease off (or, if it falls short, hit harder)
+    // can't get there (into a headwind, say): hit harder; into the net at this pace: ease off
+    // for a higher arc
     const short = Math.hypot(sol.land.x - p0.x, sol.land.z - p0.z) < Math.hypot(target.x - p0.x, target.z - p0.z) - 0.6;
-    if (spec.soft) speed *= 1.09;
-    else if (short && sol.netClear >= clear) speed *= 1.08;
+    if (spec.soft || short) speed *= 1.09;
     else speed *= 0.92;
     if (speed < 3) break;
   }
@@ -149,6 +141,7 @@ function solveAtSpeed(p0: V3, target: { x: number; z: number }, speed: number, s
     az += dAz;
   }
   const v = velOf(elev, az);
-  const netClear = res.netY === Infinity ? 9 : res.netY - BALL_R - netTop(res.netX);
+  // never reaching the net is no clearance at all (it used to read as a mile over it)
+  const netClear = res.netY === Infinity ? (Math.sign(res.z) !== Math.sign(p0.z) ? 9 : -9) : res.netY - BALL_R - netTop(res.netX);
   return { v, w, speed, land: { x: res.x, z: res.z }, netClear, ok: false, elev };
 }

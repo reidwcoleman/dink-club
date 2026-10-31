@@ -46,6 +46,17 @@ export class World {
     this.club.setNight(p.night ? 1 : this.sky.name === 'sunset' ? 0.45 : 0, this.sky.exposure);
   }
 
+  /**
+   * the still scenery's matrices are computed once: three otherwise walks every fence post, seat
+   * and palm each frame (a quarter of the frame's script time on the TV's CPU)
+   */
+  freeze(extra: THREE.Object3D[] = []) {
+    for (const o of [this.club.group, this.net.group, this.court.mesh, ...extra]) {
+      o.updateMatrixWorld(true);
+      o.matrixWorldAutoUpdate = false;
+    }
+  }
+
   /** after everything is in the scene: capture the environment */
   finalize() {
     this.applyLight();

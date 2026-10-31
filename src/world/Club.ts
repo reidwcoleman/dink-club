@@ -608,12 +608,23 @@ export class Club {
     this.swayFronds();
   }
 
+  /** the breeze (m/s over the court): the fronds stream with it and flutter harder */
+  private wind = { x: 0, z: 0 };
+  setWind(x: number, z: number) {
+    this.wind.x = x;
+    this.wind.z = z;
+  }
+
   private swayFronds() {
     const f = this.fronds;
     if (!f) return;
     const e = new THREE.Euler(0, 0, 0, 'YXZ'), q = new THREE.Quaternion(), m = new THREE.Matrix4(), sc = new THREE.Vector3();
+    const ws = Math.hypot(this.wind.x, this.wind.z);
+    const amp = 0.6 + ws * 0.35, rate = 1 + ws * 0.25;
     f.data.forEach((d, i) => {
-      e.set(0, d.yaw, d.pitch + Math.sin(this.t * 1.3 + d.ph) * 0.035 + Math.sin(this.t * 0.37 + d.ph * 2) * 0.03);
+      // a frond pointing downwind lifts and streams out, one pointing into it is pressed down
+      const along = ws > 0.01 ? (Math.cos(d.yaw) * this.wind.x - Math.sin(d.yaw) * this.wind.z) / ws : 0;
+      e.set(0, d.yaw, d.pitch + along * ws * 0.035 + (Math.sin(this.t * 1.3 * rate + d.ph) * 0.035 + Math.sin(this.t * 0.37 * rate + d.ph * 2) * 0.03) * amp);
       q.setFromEuler(e);
       m.compose(d.p, q, sc.setScalar(d.s));
       f.mesh.setMatrixAt(i, m);

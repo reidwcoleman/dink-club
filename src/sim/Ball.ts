@@ -2,6 +2,7 @@ import { BALL_R, BALL_M, netTop, POST_X, SURFACE_PHYS, type Surface } from './di
 
 /**
  * Pickleball flight, independent of the renderer (tools/simtest.ts runs it in node):
+ *  - wind: drag and lift on the ball's speed through the air (WIND)
  *  - gravity, quadratic drag (Cd 0.45: the holes make a light plastic ball slow down fast)
  *  - Magnus lift from spin, C_L = 1 / (2 + v / (r·ω)) (Watts & Ferrer), a fifth weaker for a holed
  *    shell (slow-motion sidespin drives bend ~0.5 m)
@@ -167,7 +168,17 @@ export function dragK(s: number, ws: number): number {
 export function spinKeep(s: number, h: number): number {
   return Math.exp(-h * (0.12 + 0.018 * s));
 }
-export function accel(v: V3, w: V3): V3 {
+/**
+ * The air moving over the court (m/s, horizontal). Drag and lift act on the ball's speed through
+ * the air, not over the ground: a 3 m/s breeze moves a floating dink by half a metre, holds a
+ * drive up into it, carries a lob. Set by the game (gusting slowly); the predictions and the shot
+ * solver fly the same air.
+ */
+export const WIND = { x: 0, z: 0 };
+const _r = v3();
+export function accel(vg: V3, w: V3): V3 {
+  const v = _r;
+  v.x = vg.x - WIND.x; v.y = vg.y; v.z = vg.z - WIND.z;
   const s = Math.hypot(v.x, v.y, v.z);
   const ws = Math.hypot(w.x, w.y, w.z);
   const kd = dragK(s, ws);
