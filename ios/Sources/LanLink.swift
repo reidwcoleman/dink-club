@@ -102,6 +102,8 @@ final class LanLink {
         if let v = vel { m["vel"] = [v.x, v.y, v.z] }
         if let n { m["n"] = [n.x, n.y, n.z] }
         if let h = s.side { m["hand"] = h }
+        m["id"] = s.id
+        m["pre"] = s.pre
         send(m)
         q.asyncAfter(deadline: .now() + 0.012) { self.send(m) }
     }

@@ -13,7 +13,7 @@ const LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 /** phone → TV */
 export type PadMsg =
   | { t: 'hello'; id: string; name: string; paddle: number }
-  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null; vel?: number[] | null; n?: number[] | null; hand?: number | null }
+  | { t: 'swing'; power: number; lift: number; peak: number; ago?: number; tp?: number; face?: number | null; aim?: number | null; vel?: number[] | null; n?: number[] | null; hand?: number | null; id?: number | null; pre?: boolean }
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
   /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
   | { t: 'pos'; x: number; z: number; vx?: number; vz?: number }
@@ -51,7 +51,7 @@ export class Lobby {
   peer: Peer | null = null;
   readonly slots: (Slot | null)[] = [null, null];
   status: 'connecting' | 'ready' | 'offline' = 'connecting';
-  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null; hand: number | null }) => void) | null = null;
+  onSwing: ((slot: number, s: { power: number; lift: number; at: number; face: number | null; aim: number | null; vel: number[] | null; n: number[] | null; hand: number | null; id: number | null; pre: boolean }) => void) | null = null;
   onTap: ((slot: number, what: string) => void) | null = null;
   onPos: ((slot: number, x: number, z: number, vx: number, vz: number) => void) | null = null;
   onOri: ((slot: number, shaft: number[], face: number[]) => void) | null = null;
@@ -198,7 +198,7 @@ export class Lobby {
           const synced = m.tp - off;
           if (synced <= now + 0.02 && synced > now - 0.4) at = synced;
         }
-        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null, vel: vec3(m.vel), n: vec3(m.n), hand: m.hand === 1 || m.hand === -1 ? m.hand : null });
+        this.onSwing?.(slot, { power: clamp01(m.power), lift: Math.max(-1, Math.min(1, +m.lift || 0)), at, face: typeof m.face === 'number' ? m.face : null, aim: typeof m.aim === 'number' ? m.aim : null, vel: vec3(m.vel), n: vec3(m.n), hand: m.hand === 1 || m.hand === -1 ? m.hand : null, id: typeof m.id === 'number' ? m.id : null, pre: m.pre === true });
       }
       else if (m.t === 'tap') this.onTap?.(slot, m.what);
       else if (m.t === 'pong') {

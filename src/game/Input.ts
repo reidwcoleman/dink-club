@@ -27,6 +27,9 @@ export interface Swing {
   n?: number[] | null;
   /** which way the phone turned through the swing: +1 a forehand, −1 a backhand (right-handed), null unsure */
   hand?: number | null;
+  /** the phone's number for this swing; `pre`: the first word, sent the instant it started (the full reading follows with the same id) */
+  id?: number | null;
+  pre?: boolean;
 }
 
 export class Input {

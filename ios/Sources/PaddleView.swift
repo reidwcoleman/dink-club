@@ -67,6 +67,7 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     private var lanLink: LanLink?
     private let finder = TVFinder()
     private let keepAlive = KeepAlive()
+    private let pock = Pock()
     @Published var live = false
     @Published var pulse = false
     @Published var text = "Connecting…"
@@ -103,12 +104,15 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                     extra = String(format: ",vel:[%.3f,%.3f,%.3f],n:[%.3f,%.3f,%.3f]", v.x, v.y, v.z, n.x, n.y, n.z)
                 }
                 if let h = s.side { extra += ",hand:\(h)" }
+                extra += ",id:\(s.id),pre:\(s.pre ? "true" : "false")"
                 let js = String(format: "window.__nativeSwing && window.__nativeSwing({power:%.4f,lift:%.4f,face:%.4f,aim:%@,ago:%.4f,peak:%.0f%@})",
                                 s.power, s.lift, s.face, s.aim.map { String(format: "%.4f", $0) } ?? "null", s.ago(), s.peak, extra)
                 self.web?.evaluateJavaScript(js)
             }
-            self.pulse = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
+            if s.pre {
+                self.pulse = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
+            }
         }
         motion.onPose = { [weak self] sh, f in
             guard let self, self.live else { return }
@@ -162,7 +166,10 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     private func fromTV(_ m: [String: Any]) {
         switch m["t"] as? String {
         case "hit":
-            if ((m["power"] as? Double) ?? 0) > 0.75 { hard.impactOccurred(intensity: 1) } else { hit.impactOccurred(intensity: 0.85) }
+            let pw = (m["power"] as? Double) ?? 0.5
+            if pw > 0.75 { hard.impactOccurred(intensity: 1) } else { hit.impactOccurred(intensity: 0.85) }
+            // the paddle's "pock" from the paddle itself, as the Wii Remote's speaker does
+            pock.play(power: pw)
             hit.prepare(); hard.prepare()
         case "point":
             if (m["won"] as? Bool) == true { note.notificationOccurred(.success) }
@@ -270,6 +277,10 @@ struct Swing {
     var hand = SIMD3<Double>(0, 0, 0)
     /// which way the phone turned about the vertical through the swing: +1 forehand, −1 backhand (right-handed)
     var side: Int? = nil
+    /// this swing's number, and whether this is the first word of it (sent the instant it starts,
+    /// as the Wii Remote does: the TV times the hit on it; the full reading follows at the peak)
+    var id = 0
+    var pre = false
     func ago() -> Double { max(0, ProcessInfo.processInfo.systemUptime - t) }
     func with(lift: Double? = nil, power: Double? = nil, aim: Double? = nil) -> Swing {
         var s = self
@@ -311,6 +322,7 @@ final class SwingDetector {
     private struct S { let t: TimeInterval; let g: Double; let e: Double; let v: SIMD3<Double>; let h: SIMD3<Double>; let n: SIMD3<Double> }
     /// this player's full-swing paddle-head speed (m/s), learned from their hard swings
     private var fullSpeed = 6.5
+    private var swingId = 0
     private var samples: [S] = []
     private var vHand = SIMD3<Double>(0, 0, 0)
     private var last: TimeInterval = 0
@@ -384,7 +396,15 @@ final class SwingDetector {
             // a full swing turns the phone fast; a dink or a block barely turns it but pushes the
             // paddle toward the net
             let soft = g > 60 && spNow > 1.1 && vHead.z > 0.7
-            if (g > start0 || soft) && t > cool { swinging = true; yawTurn = 0 } else { return }
+            // (a take-back turns the phone fast too, but the head goes away from the net: not a swing)
+            let forward = vHead.z > -0.2
+            if ((g > start0 && forward) || soft) && t > cool { swinging = true; yawTurn = 0 } else { return }
+            // the swing has started: say so now (the TV times the hit on this), details at the peak
+            swingId += 1
+            let n0 = room(SIMD3(0, 0, 1))
+            let first = Swing(power: soft ? 0.15 : max(0.25, min(1, 0.3 + (g - start0) / 900)), lift: 0, face: n0.y, aim: nil,
+                              peak: g, t: t, id: swingId, pre: true)
+            DispatchQueue.main.async { self.onSwing?(first) }
         }
         yawTurn += simd_dot(w, up) * dt
         // how much swing there is: turn rate and head speed together, so soft pushes peak too
@@ -420,7 +440,7 @@ final class SwingDetector {
                       face: pk.n.y,
                       aim: abs(nf.z) > 0.2 ? max(-1.6, min(1.6, atan2(nf.x, nf.z) / (40 * .pi / 180))) : nil,
                       peak: gPeak, t: tPeak, vel: v, n: nf, hand: pk.h,
-                      side: yawTurn > 0.35 ? 1 : yawTurn < -0.35 ? -1 : nil)
+                      side: yawTurn > 0.35 ? 1 : yawTurn < -0.35 ? -1 : nil, id: swingId)
         vHand = .zero
         DispatchQueue.main.async { self.onSwing?(s) }
     }

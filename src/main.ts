@@ -83,7 +83,7 @@ lobby.onChange = () => {
 };
 lobby.onSwing = (slot, s) => {
   audio.start();
-  input.push(slot, { at: s.at, power: s.power, lift: s.lift, face: s.face, aim: s.aim, vel: s.vel, n: s.n, hand: s.hand, from: 'phone' });
+  input.push(slot, { at: s.at, power: s.power, lift: s.lift, face: s.face, aim: s.aim, vel: s.vel, n: s.n, hand: s.hand, id: s.id, pre: s.pre, from: 'phone' });
   if (!inMatch) menu.swingTest(slot, s.power);
   if (summaryEl && game?.match?.winner !== null) rematch();
 };

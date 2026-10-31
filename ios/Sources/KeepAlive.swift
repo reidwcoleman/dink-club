@@ -39,3 +39,45 @@ final class KeepAlive {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 }
+
+/**
+ The hit's sound from the phone: a hard plastic ball off a composite paddle is a short, bright
+ "pock" — a ~1.2 kHz knock that dies in a few tens of milliseconds over a click of noise. Made
+ once in code; played from its own engine, mixed with whatever else is playing.
+ */
+final class Pock {
+    private let engine = AVAudioEngine()
+    private let node = AVAudioPlayerNode()
+    private var buffer: AVAudioPCMBuffer?
+    private var ready = false
+
+    private func setUp() {
+        let fmt = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        let n = AVAudioFrameCount(44100 * 0.09)
+        guard let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return }
+        b.frameLength = n
+        let d = b.floatChannelData![0]
+        var seed: UInt32 = 12345
+        for i in 0..<Int(n) {
+            let t = Double(i) / 44100
+            seed = seed &* 1664525 &+ 1013904223
+            let noise = Double(Int32(bitPattern: seed)) / Double(Int32.max)
+            let knock = sin(2 * .pi * 1180 * t) * 0.7 + sin(2 * .pi * 2650 * t) * 0.25
+            let v = knock * exp(-t / 0.018) + noise * exp(-t / 0.004) * 0.5
+            d[i] = Float(v * 0.9)
+        }
+        buffer = b
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: fmt)
+        do { try engine.start(); ready = true } catch { ready = false }
+    }
+
+    func play(power: Double) {
+        if buffer == nil { setUp() }
+        guard ready, let b = buffer else { return }
+        if !engine.isRunning { try? engine.start() }
+        node.volume = Float(0.45 + 0.55 * max(0, min(1, power)))
+        node.scheduleBuffer(b, at: nil, options: .interrupts)
+        if !node.isPlaying { node.play() }
+    }
+}

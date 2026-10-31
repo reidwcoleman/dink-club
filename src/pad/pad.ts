@@ -401,10 +401,10 @@ function escapeHtml(s: string) {
 addEventListener('keydown', (e) => { if (e.code === 'Space' && connected) { send({ t: 'swing', power: e.shiftKey ? 0.9 : 0.5, lift: 0, peak: 0 }); meter(0.5); } });
 
 /** the app found a swing peak (its own 100 Hz sensor fusion): forward it like one of ours */
-(window as unknown as Record<string, unknown>).__nativeSwing = (w: { power: number; lift: number; face: number; aim: number | null; ago: number; peak: number; vel?: number[]; n?: number[]; hand?: number }) => {
+(window as unknown as Record<string, unknown>).__nativeSwing = (w: { power: number; lift: number; face: number; aim: number | null; ago: number; peak: number; vel?: number[]; n?: number[]; hand?: number; id?: number; pre?: boolean }) => {
   if (!connected) return;
   const now = performance.now() / 1000;
-  send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago, vel: w.vel ?? null, n: w.n ?? null, hand: w.hand ?? null });
+  send({ t: 'swing', power: w.power, lift: w.lift, peak: Math.round(w.peak), tp: now - w.ago, face: w.face, aim: w.aim, ago: w.ago, vel: w.vel ?? null, n: w.n ?? null, hand: w.hand ?? null, id: w.id ?? null, pre: !!w.pre });
   meter(w.power);
 };
 

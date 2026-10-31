@@ -62,7 +62,9 @@ export interface GameConfig {
 const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', reset: 'groundstroke', drive: 'drive', lob: 'lob', smash: 'overhead', serve: 'serve' };
 
 /** timing window for a human swing relative to the ideal contact (s) */
-const EARLY = 0.3, LATE = 0.18;
+// the hit window around the ball reaching the paddle (after this player's learned delay): Wii
+// Sports-wide — a swing in it hits; when in it decides where the ball goes, not whether it goes
+const EARLY = 0.42, LATE = 0.26;
 
 export class Game {
   readonly ball = new BallSim();
@@ -88,7 +90,10 @@ export class Game {
   private lastShot: ShotType = 'serve';
   private serve: { tContact: number; release: number; released: boolean; choice: ShotChoice; contact: THREE.Vector3 } | null = null;
   /** a human's committed swing for the current plan: strike at `at` with this timing error */
-  private committed: [{ at: number; err: number; swing: Swing } | null, { at: number; err: number; swing: Swing } | null] = [null, null];
+  /** a human's swing landed for the ball coming: when it strikes (game clock), how far off it was, the swing, and when (real time) it was taken */
+  private committed: [{ at: number; err: number; swing: Swing; realAt?: number } | null, { at: number; err: number; swing: Swing; realAt?: number } | null] = [null, null];
+  /** holding the ball at a paddle (all but frozen) for a swing's full reading, until this real time */
+  private holdFull: { idx: number; until: number } | null = null;
   private prevVel = [new THREE.Vector3(), new THREE.Vector3()];
   /** this player already missed the ball in flight (no more plans until the next strike) */
   private missed = [false, false];
@@ -115,7 +120,8 @@ export class Game {
    */
   waitHit: { idx: number; until: number } | null = null;
   /** each human's usual delay from the ball reaching their paddle (as the game runs it) to their swing landing here, learned as they play */
-  lag = [0.13, 0.13];
+  lag = [0.1, 0.1];
+  private lastSwingId: (number | null)[] = [null, null];
   /** each player's usual face tilt at contact (forehand, backhand), from the phone */
   private faceBase = [[NaN, NaN], [NaN, NaN]];
   replay!: Replay;
@@ -347,6 +353,11 @@ export class Game {
       const w = this.waitHit, P = this.players[w.idx];
       if (this.state !== 'rally' || !P.plan || (!this.committed[w.idx] && this.realClock > w.until)) this.waitHit = null;
       else dt *= this.committed[w.idx] ? 0.3 : 0.06;
+    }
+    if (this.holdFull) {
+      const h = this.holdFull, c = this.committed[h.idx];
+      if (this.state !== 'rally' || !c || !c.swing.pre || this.realClock > h.until) this.holdFull = null;
+      else dt *= 0.08;
     }
     if (this.hitStop > 0) {
       this.hitStop -= dt;
@@ -628,6 +639,21 @@ export class Game {
     const sw = this.input.take(p.index, 0.5);
     const plan = p.plan;
     if (!sw) return;
+    // the full reading of a swing whose first word (its start) already arrived: power, path, face
+    // and side replace the first guess; the timing stays the start's
+    if (sw.pre === false && sw.id != null && sw.id === this.lastSwingId[p.index]) {
+      const c0 = this.committed[p.index];
+      if (c0 && c0.swing.id === sw.id) {
+        c0.swing = { ...sw, at: c0.swing.at };
+        if (plan && p.shot && this.clock <= c0.at) {
+          const type = this.humanShot(p, plan, c0.swing);
+          const sp = this.humanSpin(plan, c0.swing, type);
+          p.shot.type = type; p.shot.power = sw.power; p.shot.rpm = sp.rpm; p.shot.label = sp.label;
+        }
+      }
+      return;
+    }
+    if (sw.id != null) this.lastSwingId[p.index] = sw.id;
     // the swing's moment in real time (it peaked a moment ago on the phone), against the moment the
     // ball reached the paddle — less this player's usual delay, so "on time" is on time for them
     const atReal = this.realClock - Math.max(0, performance.now() / 1000 - sw.at);
@@ -670,14 +696,15 @@ export class Game {
     }
     if (err > LATE) return;
     // learn this player's delay from the swings that connect
-    this.lag[p.index] = THREE.MathUtils.clamp(this.lag[p.index] * 0.8 + raw * 0.2, 0.02, 0.3);
+    this.lag[p.index] = THREE.MathUtils.clamp(this.lag[p.index] * 0.8 + raw * 0.2, -0.05, 0.3);
     const type = this.humanShot(p, plan, sw);
     const sp = this.humanSpin(plan, sw, type);
     p.shot = { type, aimX: 0, aimD: 0, power: sw.power, pressT: sw.at, released: true, rpm: sp.rpm, label: sp.label };
     // the ball is already at the paddle (the game waited): snap the stroke through it now
     const waiting = !!plan.realContact;
-    const strikeAt = waiting ? this.clock + 0.03 : Math.max(this.clock + 0.05, plan.tContact);
-    this.committed[p.index] = { at: strikeAt, err, swing: sw };
+    // (a beat for the full reading of the swing to arrive when the game was waiting on it)
+    const strikeAt = waiting ? this.clock + 0.04 : Math.max(this.clock + 0.05, plan.tContact);
+    this.committed[p.index] = { at: strikeAt, err, swing: sw, realAt: this.realClock };
     plan.swung = true;
     // the stroke the phone made: a chop down is a slice, a brush up a topspin stroke
     let kind = this.strokeFor(p, plan, type);
@@ -761,6 +788,13 @@ export class Game {
         return;
       }
       if (this.clock < c.at) return;
+      // the swing's start timed it; its full reading (power, path, face) is a beat behind: hold
+      // the ball at the paddle for it, briefly (never later than a peak-timed swing would have landed)
+      if (c.swing.pre && this.realClock < (c.realAt ?? 0) + 0.16) {
+        if (!this.holdFull) this.holdFull = { idx: p.index, until: (c.realAt ?? 0) + 0.16 };
+        return;
+      }
+      this.holdFull = null;
     }
     // contact
     const b = this.ball.p;
@@ -784,7 +818,7 @@ export class Game {
     const inSpeed = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
     if (p.human) {
       const err = c!.err;
-      quality = THREE.MathUtils.clamp(1 - Math.max(0, Math.abs(err) - 0.07) / 0.3, 0.3, 1);
+      quality = THREE.MathUtils.clamp(1 - Math.max(0, Math.abs(err) - 0.09) / 0.4, 0.4, 1);
       // at full stretch (the run got there late) the contact is weaker
       if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
       // off the sweet spot: the ball came in away from where the paddle wanted it
@@ -830,7 +864,9 @@ export class Game {
       const timing = (plan.forehand ? k : -k) * 0.95;
       // where the paddle face pointed (the phone's heading at contact) leads; timing adds to it
       const faceAim = cm?.swing.aim;
-      aimX = faceAim == null ? timing + (Math.random() - 0.5) * 0.25 : THREE.MathUtils.clamp(faceAim, -1.4, 1.4) * 0.75 + timing * 0.3 + (Math.random() - 0.5) * 0.12;
+      // (as in Wii Sports: the timing places it — early pulls cross-court, late pushes down the line —
+      // and where the phone faced nudges it)
+      aimX = timing * 0.85 + (faceAim == null ? 0 : THREE.MathUtils.clamp(faceAim, -1.4, 1.4) * 0.3) + (Math.random() - 0.5) * 0.15;
     }
     const s = p.side;
     const opp = this.players[1 - p.index];
@@ -877,7 +913,7 @@ export class Game {
       const band = type === 'dink' || type === 'drop' ? [0, 0.3] : type === 'reset' ? [0.3, 0.66] : type === 'drive' ? [0.66, 1] : null;
       if (band) {
         const u = THREE.MathUtils.clamp((power - band[0]) / (band[1] - band[0]), 0, 1);
-        depth = type === 'dink' ? 0.6 + u * 1.3 : type === 'drop' ? 0.8 + u * 1.5 : plan.volley ? 3.2 + u * 3 : HL - 2.6 + u * 1.9;
+        depth = type === 'dink' ? 0.6 + u * 1.3 : type === 'drop' ? 0.8 + u * 1.5 : plan.volley ? 3.2 + u * 2.6 : HL - 2.7 + u * 1.7;
       }
       // the face: opened past how you usually hold it, the ball goes up and long; closed, flat and
       // short. Learned per player and per side (the phone sits differently in every hand)
@@ -886,8 +922,8 @@ export class Game {
         const k = plan.forehand ? 0 : 1, base = this.faceBase[p.index][k];
         const d = Number.isNaN(base) ? 0 : THREE.MathUtils.clamp(fn[1] - base, -0.45, 0.45);
         this.faceBase[p.index][k] = Number.isNaN(base) ? fn[1] : base * 0.85 + fn[1] * 0.15;
-        spec.clear = Math.max(0.05, (spec.clear ?? 0.2) + d * 1.4);
-        depth = Math.max(0.5, depth + d * 1.6);
+        spec.clear = Math.max(0.05, (spec.clear ?? 0.2) + d * 0.9);
+        depth = Math.max(0.5, depth + d * 1.0);
       }
     }
     // a soft shot off a hard ball: the paddle face gives it back with interest unless it's taken off
@@ -918,12 +954,12 @@ export class Game {
       if (Math.random() < L.errors + pressure) forced = type === 'dink' || type === 'drop' ? (Math.random() < 0.6 ? 'net' : 'wide') : (['long', 'wide', 'net'] as const)[Math.floor(Math.random() * 3)];
       // the classic pickleball mistake: a touch shot that floats up, attackable
       else if ((type === 'dink' || type === 'drop' || type === 'reset') && Math.random() < L.errors * 1.2 + pressure * 0.5) forced = 'pop';
-    } else if ((type === 'dink' || type === 'drop') && quality < 0.6 && Math.random() < 0.7) forced = 'pop';
-    else if (absorb > 0 && Math.random() < absorb * (1.1 - quality) * 0.9) forced = 'pop';
-    // a mistimed swing at a smash just gets a frame on it
-    else if (p.human && inSpeed > 17 && quality < 0.6 && Math.random() < 0.55) forced = 'pop';
-    // a swing that barely meets it: off the frame
-    else if (p.human && quality < 0.4 && Math.random() < (0.4 - quality) * 1.2) forced = 'net';
+    // a human's swing goes where it was aimed unless it was badly mistimed (a touch shot floats up,
+    // a smash or a hard ball just gets a frame on it, a barely-met ball goes in the net)
+    } else if ((type === 'dink' || type === 'drop') && quality < 0.35 && Math.random() < 0.45) forced = 'pop';
+    else if (absorb > 0 && Math.random() < absorb * (1.1 - quality) * 0.45) forced = 'pop';
+    else if (p.human && inSpeed > 17 && quality < 0.4 && Math.random() < 0.4) forced = 'pop';
+    else if (p.human && quality < 0.22 && Math.random() < (0.22 - quality) * 1.5) forced = 'net';
     let tx = aimX * (HW - 0.45);
     if (forced === 'long') depth = HL + 0.3 + Math.random() * 1.2;
     if (forced === 'wide') tx = Math.sign(tx || Math.random() - 0.5) * (HW + 0.2 + Math.random() * 0.8);
@@ -1024,9 +1060,11 @@ export class Game {
     hit.v.x *= dull; hit.v.y *= dull; hit.v.z *= dull;
     // what practice gives back: part of the way toward the intended launch
     // (less with a measured path: the curve is the player's)
-    const assist = (this.cfg.move === 'body' ? 0.45 : 0.6) * (mv ? 0.75 : 1);
-    const v = hit.v, sp = len(v);
-    const dir = norm({ x: v.x + (want.x / len(want) * sp - v.x) * assist, y: v.y + (want.y / len(want) * sp - v.y) * assist, z: v.z + (want.z / len(want) * sp - v.z) * assist });
+    const assist = (this.cfg.move === 'body' ? 0.7 : 0.8) * (mv ? 0.85 : 1);
+    const v = hit.v, sp0 = len(v);
+    const dir = norm({ x: v.x + (want.x / len(want) * sp0 - v.x) * assist, y: v.y + (want.y / len(want) * sp0 - v.y) * assist, z: v.z + (want.z / len(want) * sp0 - v.z) * assist });
+    // and most of the pace: a mistimed touch shot lands a little off, not in the net
+    const sp = sp0 + (len(want) - sp0) * assist * 0.8;
     return { v: { x: dir.x * sp, y: dir.y * sp, z: dir.z * sp }, w: hit.w };
   }
 
