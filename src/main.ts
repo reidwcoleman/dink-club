@@ -169,8 +169,18 @@ function textureDiet() {
     const mesh = o as THREE.Mesh;
     if (!GFX.recv && mesh.isMesh && mesh !== world.court.mesh) mesh.receiveShadow = false;
     const sm = mesh.material as THREE.MeshStandardMaterial;
-    if (GFX.lambert && mesh.isMesh && !(mesh as THREE.SkinnedMesh).isSkinnedMesh && sm?.type === 'MeshStandardMaterial' && sm.onBeforeCompile === THREE.Material.prototype.onBeforeCompile) {
-      mesh.material = new THREE.MeshLambertMaterial({ color: sm.color, map: sm.map, alphaMap: sm.alphaMap, alphaTest: sm.alphaTest, transparent: sm.transparent, opacity: sm.opacity, side: sm.side, vertexColors: sm.vertexColors, emissive: sm.emissive, emissiveMap: sm.emissiveMap, emissiveIntensity: sm.emissiveIntensity });
+    // the physically based shader is the TV GPU's biggest cost (measured on the set: the club's
+    // custom-painted walls and the players were ~40% of a frame): Lambert, keeping any custom
+    // surface code (it only paints the diffuse colour)
+    if (GFX.lambert && mesh.isMesh && mesh !== world.court.mesh && (sm?.type === 'MeshStandardMaterial' || sm?.type === 'MeshPhysicalMaterial')) {
+      const l = new THREE.MeshLambertMaterial({ color: sm.color, map: sm.map, alphaMap: sm.alphaMap, alphaTest: sm.alphaTest, transparent: sm.transparent, opacity: sm.opacity, side: sm.side, vertexColors: sm.vertexColors, emissive: sm.emissive, emissiveMap: sm.emissiveMap, emissiveIntensity: sm.emissiveIntensity, fog: sm.fog, depthWrite: sm.depthWrite });
+      if (sm.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) {
+        l.onBeforeCompile = sm.onBeforeCompile;
+        const key = sm.customProgramCacheKey();
+        l.customProgramCacheKey = () => 'lam:' + key;
+      }
+      l.name = sm.name;
+      mesh.material = l;
     }
     const mats = (o as THREE.Mesh).material;
     if (!mats) return;
