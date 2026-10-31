@@ -154,6 +154,10 @@ export class PlayerRig {
   /** world position (on the floor) */
   readonly pos = new THREE.Vector3();
   readonly vel = new THREE.Vector3();
+  private prevVel = new THREE.Vector3();
+  private acc = new THREE.Vector3();
+  /** the paddle's kick back off a ball (decays in a few frames) */
+  private recoil = 0;
   /** where the chest and head turn to (the ball / the net) */
   readonly focus = new THREE.Vector3(0, 1, 0);
   /** the ball (head look) */
@@ -365,6 +369,7 @@ export class PlayerRig {
 
   update(dt: number) {
     this.clock += dt;
+    this.recoil *= Math.exp(-dt / 0.05);
     const h = this.human;
     // ---------------- stroke timing
     let keyPose: Key = READY;
@@ -499,6 +504,24 @@ export class PlayerRig {
     turn(b.Bip01_Spine2, up, chestAng * 0.5 + counter * 0.5);
     turn(b.Bip01_Spine1, rightAxis, -lean * DEG * 0.5);
     turn(b.Bip01_Spine2, rightAxis, -lean * DEG * 0.3);
+    // the body as an inverted pendulum: it tips into acceleration (a sprint start, a cut to the
+    // side) and sits back against braking, about half the angle the force asks for (tan θ = a / g)
+    {
+      const ax = (this.vel.x - this.prevVel.x) / Math.max(1e-3, dt), az = (this.vel.z - this.prevVel.z) / Math.max(1e-3, dt);
+      this.prevVel.copy(this.vel);
+      const k = Math.min(1, dt / 0.12);
+      this.acc.x += (THREE.MathUtils.clamp(ax, -14, 14) - this.acc.x) * k;
+      this.acc.z += (THREE.MathUtils.clamp(az, -14, 14) - this.acc.z) * k;
+      const fw = this.acc.x * Math.sin(rootYaw) + this.acc.z * Math.cos(rootYaw);
+      const sd = this.acc.x * -Math.cos(rootYaw) + this.acc.z * Math.sin(rootYaw);
+      const pitch = THREE.MathUtils.clamp(Math.atan2(fw, 9.81) * 0.5, -0.2, 0.22);
+      const roll = THREE.MathUtils.clamp(Math.atan2(sd, 9.81) * 0.5, -0.22, 0.22);
+      const fAxis = _w.set(Math.sin(rootYaw), 0, Math.cos(rootYaw));
+      turn(b.Bip01_Pelvis, rightAxis, -pitch * 0.4);
+      turn(b.Bip01_Spine1, rightAxis, -pitch * 0.6);
+      turn(b.Bip01_Pelvis, fAxis, roll * 0.5);
+      turn(b.Bip01_Spine1, fAxis, roll * 0.5);
+    }
     // ---------------- legs
     h.inner.position.y = -drop + this.hop + lift;
     root.updateMatrixWorld(true);
@@ -669,7 +692,10 @@ export class PlayerRig {
       off.multiplyScalar(1 - this.liveW);
       head.add(off);
     }
+    // the impact: the head gives back along the face and the wrist lets it tip a few degrees
+    if (this.recoil > 0.01) head.addScaledVector(toWorld(k.face, new THREE.Vector3(), false).normalize(), -0.045 * this.recoil);
     let shaft = toWorld(k.shaft, new THREE.Vector3(), false).normalize();
+    if (this.recoil > 0.01) shaft.addScaledVector(toWorld(k.face, new THREE.Vector3(), false).normalize(), -0.12 * this.recoil).normalize();
     const face = toWorld(k.face, new THREE.Vector3(), false).normalize();
     {
       // a ball at full stretch: the paddle comes into line with the arm (a player reaching), and if
@@ -728,6 +754,11 @@ export class PlayerRig {
     lua.updateMatrixWorld(true);
     lh.getWorldPosition(this.offHand);
     void root;
+  }
+
+  /** the ball met the paddle: it gives a little in the hand (strength 0…1) */
+  impact(k: number) {
+    this.recoil = Math.max(this.recoil, Math.min(1, k));
   }
 
   /** the racket's sweet spot in the world (for hit effects) */

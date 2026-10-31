@@ -188,7 +188,7 @@ async function play(c: MenuChoice, demo = false) {
   await game.setup({ level: c.level as Difficulty, players: two ? 2 : 1, ...formatOf(c.format), near, far, demo, move: c.move === 'body' ? 'body' : 'auto' }, names, [lobby.paddle(0), two ? lobby.paddle(1) : 1 + Math.floor(Math.random() * 2)]);
   world.scene.environment = null;
   world.sky.captureEnv(world.dynamic);
-  if (GFX.lite) { textureDiet(); renderer.refreshShadows(); }
+  if (GFX.lite) { textureDiet(); if (params.get('bake') !== '0') { const t0 = performance.now(); world.bakeFloor(); console.log(`[bake] floor ${Math.round(performance.now() - t0)} ms`); } renderer.refreshShadows(); }
   menu.hide();
   hud.show(true);
   inMatch = true;
@@ -212,7 +212,7 @@ menu.onPlay = (c) => void play(c);
 menu.onChange = (key, c) => {
   audio.start();
   audio.music(1);
-  if (key === 'sky') void world.setSky(c.sky as SkyName).then(() => renderer.refreshShadows());
+  if (key === 'sky') void world.setSky(c.sky as SkyName).then(() => { if (GFX.lite && params.get('bake') !== '0') world.bakeFloor(); renderer.refreshShadows(); });
   if (key === 'move') lobby.broadcast({ t: 'mode', move: c.move === 'body' ? 'body' : 'auto' });
 };
 // browsers keep audio off until someone clicks or presses a key on the TV's page

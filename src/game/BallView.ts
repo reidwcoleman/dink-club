@@ -114,6 +114,17 @@ export class BallView {
     this.squash = 1;
   }
 
+  /**
+   * where the ball is drawn off the paddle: the sim's contact point and the paddle the player's
+   * arm actually got there can sit a few centimetres apart, so the ball starts from the paddle
+   * face and slides onto its true flight within a few frames
+   */
+  private off = new THREE.Vector3();
+  fromPaddle(sweet: THREE.Vector3, contact: V3) {
+    this.off.set(sweet.x - contact.x, sweet.y - contact.y, sweet.z - contact.z);
+    if (this.off.length() > 0.45) this.off.set(0, 0, 0);
+  }
+
   /** a shot off a hot paddle: a long orange trail */
   hot = false;
 
@@ -126,7 +137,8 @@ export class BallView {
       this.flashSprite.material.opacity = (1 - u) * (1 - u) * (0.5 + this.flashK);
       if (u >= 1) this.flashSprite.visible = false;
     }
-    this.mesh.position.set(p.x, p.y, p.z);
+    this.off.multiplyScalar(Math.exp(-dt / 0.06));
+    this.mesh.position.set(p.x + this.off.x, p.y + this.off.y, p.z + this.off.z);
     const live = p.y > BALL_R * 1.4 || Math.hypot(v.x, v.z) > 1;
     this.shadow.visible = live && this.mesh.visible && p.y < 14;
     const hgt = Math.max(0, p.y - BALL_R);

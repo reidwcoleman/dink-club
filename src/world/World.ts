@@ -59,6 +59,11 @@ export class World {
     this.sky.captureEnv(this.dynamic);
   }
 
+  /** the TV: bake the floor's full look under the current light (Court.bake) */
+  bakeFloor() {
+    this.court.bake(this.gl, this.scene, this.sky.sun, (c, hx, hz) => this.sky.placeSunShadow(c, hx, hz), this.dynamic, (on) => this.sky.bakeEnv(on, this.dynamic));
+  }
+
   readonly ballPos = new THREE.Vector3(0, 1, 0);
   update(dt: number, _t: number) {
     this.net.update(dt);

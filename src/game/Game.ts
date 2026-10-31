@@ -462,6 +462,7 @@ export class Game {
 
   /** a strike: the ball leaves the paddle */
   private launch(p: Player, contact: { x: number; y: number; z: number }, v: { x: number; y: number; z: number }, w: { x: number; y: number; z: number }, type: ShotType, power: number, quality: number) {
+    const inSpeed = Math.hypot(this.ball.v.x, this.ball.v.y, this.ball.v.z);
     this.ball.set(contact, v, w);
     this.ball.bounces = 0;
     this.lastHitter = p.index;
@@ -473,6 +474,9 @@ export class Game {
     this.ballView.hot = hot;
     this.replay.mark('hit', this.clock, contact.x, contact.z);
     const speed = Math.hypot(v.x, v.y, v.z);
+    // the paddle takes the hit: the ball leaves from its face, the face gives in the hand
+    this.ballView.fromPaddle(p.rig.sweetSpot(), contact);
+    p.rig.impact(Math.min(1, (speed + inSpeed * 0.5) / 22));
     this.ballView.flash(contact, Math.min(1, speed / 22));
     this.audio.pop(Math.min(1, speed / 20), type === 'dink' || type === 'drop' ? 'soft' : speed > 15 ? 'hard' : 'mid', this.pan(contact), p.pos.distanceTo(this.camera.position), quality);
     if (speed > 17) { this.dir.bump(0.25); this.hitStop = 0.05; }

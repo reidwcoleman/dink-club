@@ -246,8 +246,25 @@ export class Sky {
     this.hemi.intensity = ((e[0] * 0.2126 + e[1] * 0.7152 + e[2] * 0.0722) * k) / Math.PI * 1.6 + (this.preset.night ? 0.25 : 0);
   }
 
-  captureEnv(hide: THREE.Object3D[] = []) {
-    if (GFX.lite) {
+  /**
+   * The TV: the full environment lighting just for a bake (the floor), the hemisphere stand-in
+   * off meanwhile; off again frees it
+   */
+  bakeEnv(on: boolean, hide: THREE.Object3D[] = []) {
+    if (this.hemi) this.hemi.visible = !on;
+    if (on) this.captureEnv(hide, true);
+    else {
+      this.scene.environment = null;
+      this.envRT?.dispose();
+      this.envRT = null;
+      this.cubeRT.dispose();
+      this.desatRT?.dispose();
+      this.desatRT = null;
+    }
+  }
+
+  captureEnv(hide: THREE.Object3D[] = [], full = false) {
+    if (GFX.lite && !full) {
       this.liteLight();
       return;
     }
