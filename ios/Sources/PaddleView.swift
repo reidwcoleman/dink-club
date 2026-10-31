@@ -310,7 +310,7 @@ struct Swing {
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
-    /// the phone's angle ~30 a second: long edge (handle → head) and screen normal, room frame
+    /// the phone's angle ~60 a second: long edge (handle → head) and screen normal, room frame
     var onPose: ((SIMD3<Double>, SIMD3<Double>) -> Void)?
     private var lastPose: TimeInterval = 0
     /// turn about the vertical through the current swing (rad, + = counterclockwise from above)
@@ -378,7 +378,7 @@ final class SwingDetector {
         let right = simd_cross(fwd, up)
         let room = { (v: SIMD3<Double>) -> SIMD3<Double> in SIMD3(simd_dot(v, right), simd_dot(v, up), simd_dot(v, fwd)) }
         let w = SIMD3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z)
-        if t - lastPose > 1.0 / 30 {
+        if t - lastPose > 1.0 / 60 - 0.002 {
             lastPose = t
             let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1))
             DispatchQueue.main.async { self.onPose?(sh, fc) }

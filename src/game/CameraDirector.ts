@@ -15,6 +15,8 @@ export class CameraDirector {
   side: 1 | -1 = 1;
   /** player camera preference: 0 broadcast, 1 high, 2 low */
   pref = 0;
+  /** paddles-only play: the camera rides behind your paddle */
+  paddles = false;
   private pos = new THREE.Vector3(0, 8, 26);
   private look = new THREE.Vector3(0, 0, 0);
   private t = 0;
@@ -60,7 +62,12 @@ export class CameraDirector {
         // follow the midpoint of the ball and the player, a little
         const fx = THREE.MathUtils.clamp(ball.x * 0.4 + human.x * 0.6, -4, 4);
         const push = THREE.MathUtils.clamp((HL - human.z * s) * 0.3, -0.6, 1.6);
-        if (m === 'high') {
+        if (this.paddles && m === 'broadcast') {
+          // paddles only: low and close behind your paddle, the way you'd see your own
+          wantPos.set(human.x * 0.55 + fx * 0.15, 1.85, s * (Math.abs(human.z) + 3.1));
+          wantLook.set(human.x * 0.3 + fx * 0.3, 0.85, s * -2.6);
+          fov = 52;
+        } else if (m === 'high') {
           wantPos.set(fx * 0.25, 8.6, s * (HL + 10.5 - push * 0.4));
           wantLook.set(fx * 0.45, 0, s * -0.8);
           fov = 38;

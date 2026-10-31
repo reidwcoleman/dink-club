@@ -57,6 +57,8 @@ export interface GameConfig {
   demo?: boolean;
   /** how breezy (1 = a typical outdoor day, 0 = still air) */
   wind?: number;
+  /** what's on court: just the paddles (each at its phone's angle), or the players holding them */
+  view?: 'paddles' | 'people';
 }
 
 const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', reset: 'groundstroke', drive: 'drive', lob: 'lob', smash: 'overhead', serve: 'serve' };
@@ -65,6 +67,7 @@ const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', r
 // the hit window around the ball reaching the paddle (after this player's learned delay): Wii
 // Sports-wide — a swing in it hits; when in it decides where the ball goes, not whether it goes
 const EARLY = 0.42, LATE = 0.26;
+const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fone = new THREE.Vector3(1.25, 1.25, 1.25), _fq = new THREE.Quaternion(), _fq2 = new THREE.Quaternion();
 
 export class Game {
   readonly ball = new BallSim();
@@ -206,6 +209,10 @@ export class Game {
       }
     }
     this.names = names;
+    // paddles only: no bodies, no body shadows; a small shadow under each paddle instead
+    for (const p of this.players) if (p.puppet) p.puppet.root.visible = !this.paddlesOnly;
+    for (const m of this.sunShadow) m.visible = !this.paddlesOnly;
+    this.dir.paddles = this.paddlesOnly;
     this.replay = new Replay(this.players, this.ballView.mesh);
     this.hud.names = this.names;
     this.match = new Match({ to: cfg.to, games: cfg.games, rally: cfg.rally }, Math.random() < 0.5 ? 0 : 1);
@@ -396,7 +403,8 @@ export class Game {
     const look = new THREE.Vector3(this.ball.p.x, this.ball.p.y, this.ball.p.z);
     for (const p of this.players) {
       p.syncRig(dt, look);
-      p.puppet?.update();
+      if (this.paddlesOnly) this.flyPaddle(p);
+      else p.puppet?.update();
       this.footSounds(p, dt);
     }
     this.groundPlayers();
@@ -1135,7 +1143,28 @@ export class Game {
    * The ball hits a player before it bounces (a drive at the body they couldn't get the paddle
    * to): the point goes to the hitter, wherever it was going.
    */
+  /** paddles-only play */
+  get paddlesOnly() { return this.cfg?.view === 'paddles'; }
+
+  /**
+   * Paddles only: the paddle flies where the game's (hidden) player carries it, turned exactly
+   * as the phone is turned — all of it between strokes, most of it through a swing (the swing's
+   * path is the stroke's; its face is yours). A quarter bigger than life: it's all there is to read
+   */
+  private flyPaddle(p: Player) {
+    const pad = p.puppet?.paddle;
+    if (!pad) return;
+    const rk = p.rig.racket;
+    rk.updateWorldMatrix(true, false);
+    rk.matrixWorld.decompose(_fp, _fq, _fs);
+    const live = p.rig.liveQuat(_fq2);
+    if (live) _fq.slerp(live, p.rig.inStroke ? 0.65 : 1);
+    pad.matrix.compose(_fp, _fq, _fone);
+    pad.matrixWorld.copy(pad.matrix);
+  }
+
   private bodyCheck() {
+    if (this.paddlesOnly) return;
     if (this.state !== 'rally' || this.dead || this.pendingPoint || this.lastHitter === null || this.bouncesAfterHit > 0 || this.clock - this.lastHitT < 0.12) return;
     const R = this.players[1 - this.lastHitter];
     const a = this.prevBall, b = this.ball.p;
@@ -1252,7 +1281,7 @@ export class Game {
   private replayTick(dt: number) {
     const b = this.ballView.mesh.position;
     const playing = this.replay.step(dt);
-    for (const p of this.players) p.puppet?.update();
+    for (const p of this.players) if (this.paddlesOnly) this.flyPaddle(p); else p.puppet?.update();
     this.groundPlayers();
     this.dir.update(dt, b, this.dir.subject, this.players[1].pos);
     this.onDof?.(true, this.camera.position.distanceTo(b), 3);
@@ -1278,6 +1307,13 @@ export class Game {
       const m = this.contact[p.index];
       if (!m) continue;
       const r = p.rig.group.position;
+      if (this.paddlesOnly && p.puppet) {
+        // a soft spot under the paddle, smaller and fainter the higher it flies
+        const e = p.puppet.paddle.matrixWorld.elements, y = Math.max(0, e[13]);
+        m.position.set(e[12], 0.012, e[14]);
+        m.scale.setScalar(0.32 + y * 0.12);
+        continue;
+      }
       m.position.set(r.x, 0.012, r.z);
       m.rotation.y = p.rig.yaw;
       m.scale.set(0.85, 1, 0.65);

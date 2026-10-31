@@ -272,6 +272,22 @@ export class PlayerRig {
   private liveFrom: Key | null = null;
   private liveFromT = 0;
 
+  /**
+   * The phone's angle as the paddle's world rotation (its handle → head along +y, its face +z),
+   * or null without fresh angles. Paddles-only play holds the paddle exactly at it.
+   */
+  liveQuat(out: THREE.Quaternion): THREE.Quaternion | null {
+    if (!this.liveIn || this.clock - this.liveAt > 0.4) return null;
+    const f = _w.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const r = _u.set(-f.z, 0, f.x);
+    const toW = (v: THREE.Vector3, o: THREE.Vector3) => o.set(0, 0, 0).addScaledVector(r, v.x).addScaledVector(f, v.z).setY(v.y);
+    const y = toW(this.liveShaft, _lq1).normalize();
+    const z = toW(this.liveFace, _lq2);
+    z.addScaledVector(y, -z.dot(y)).normalize();
+    const x = _lq3.crossVectors(y, z);
+    return out.setFromRotationMatrix(_lm.makeBasis(x, y, z));
+  }
+
   /** the ready key at the phone's angle: the hand stays in front of the body, shifted the way the paddle points */
   private liveKey(): Key {
     const s = this.liveShaft, f = this.liveFace;
@@ -443,7 +459,8 @@ export class PlayerRig {
     // the live paddle: fresh phone angles, smoothed, held between strokes and through a held prep
     const fresh = this.liveIn !== null && this.clock - this.liveAt < 0.4;
     if (fresh) {
-      const a = Math.min(1, dt / 0.05);
+      // (a light touch: the phone sends 60 a second; just enough to hide the network's jitter)
+      const a = Math.min(1, dt / 0.022);
       this.liveShaft.lerp(this.liveIn!.shaft, a).normalize();
       this.liveFace.lerp(this.liveIn!.face, a).normalize();
     }
@@ -817,6 +834,7 @@ function mixKey(a: Key, b: Key, u: number): Key {
   const n = (x: L3, y: L3): L3 => { const v = l(x, y), m = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; };
   return { ...b, head: l(a.head, b.head), shaft: n(a.shaft, b.shaft), face: n(a.face, b.face), pole: u < 0.5 ? a.pole : b.pole };
 }
+const _lq1 = new THREE.Vector3(), _lq2 = new THREE.Vector3(), _lq3 = new THREE.Vector3(), _lm = new THREE.Matrix4();
 const smooth = (x: number) => {
   const t = Math.min(1, Math.max(0, x));
   return t * t * (3 - 2 * t);
