@@ -9,4 +9,7 @@ export const GFX = {
   recv: true,
   /** lite only: bodies cast planar (flattened) shadows; otherwise a soft quad along the sun */
   planar: false,
+  /** lite only: share of the body's triangles kept at load (0 = keep all), and whether seams may move */
+  slim: 0,
+  seams: true,
 };

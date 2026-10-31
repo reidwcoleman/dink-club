@@ -30,6 +30,8 @@ GFX.aa = params.get('aa') === '1';
 GFX.lambert = params.get('lam') !== '0';
 GFX.recv = params.get('recv') === '1';
 GFX.planar = params.get('planar') === '1';
+if (params.get('slim')) GFX.slim = +params.get('slim')!;
+if (params.get('seams') === '0') GFX.seams = false;
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;

@@ -64,7 +64,7 @@ async function slim(scene: THREE.Group, keep: number): Promise<THREE.Group> {
       uv[i * 2] = ua ? ua.getX(i) : 0; uv[i * 2 + 1] = ua ? ua.getY(i) : 0;
     }
     // the texture coordinates ride along as attributes: seams may move only where the picture doesn't tear
-    const [out] = MeshoptSimplifier.simplifyWithAttributes(idx, pos, 3, uv, 2, [5, 5], null, Math.floor((idx.length * keep) / 3) * 3, 0.06, ['Permissive']);
+    const [out] = MeshoptSimplifier.simplifyWithAttributes(idx, pos, 3, uv, 2, [5, 5], null, Math.floor((idx.length * keep) / 3) * 3, 0.06, GFX.seams ? ['Permissive'] : []);
     g.setIndex(new THREE.BufferAttribute(out, 1));
   });
   return scene;
@@ -72,7 +72,7 @@ async function slim(scene: THREE.Group, keep: number): Promise<THREE.Group> {
 function load(url: string): Promise<THREE.Group> {
   let p = cache.get(url);
   if (!p) {
-    p = new GLTFLoader().loadAsync(url).then((g) => (GFX.lite ? slim(g.scene, 0.3) : g.scene));
+    p = new GLTFLoader().loadAsync(url).then((g) => (GFX.lite && GFX.slim > 0 ? slim(g.scene, GFX.slim) : g.scene));
     cache.set(url, p);
   }
   return p;
