@@ -12,4 +12,7 @@ export const GFX = {
   /** lite only: share of the body's triangles kept at load (0 = keep all), and whether seams may move */
   slim: 0,
   seams: true,
+  /** the canvas: opaque (the compositor needn't blend it with the page) and, optionally, desynchronized (low latency) */
+  alpha: false,
+  desync: false,
 };

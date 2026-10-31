@@ -54,10 +54,17 @@ export class Renderer {
 
   constructor(readonly canvas: HTMLCanvasElement, readonly scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     this.camera = camera;
+    // the context made here so the TV can ask for an opaque (and, to try, desynchronized) canvas
+    const context = canvas.getContext('webgl2', {
+      alpha: GFX.alpha, antialias: GFX.lite && GFX.aa, depth: true, stencil: false, premultipliedAlpha: true,
+      preserveDrawingBuffer: false, powerPreference: 'high-performance', desynchronized: GFX.desync,
+    } as WebGLContextAttributes) as WebGL2RenderingContext;
     this.gl = new THREE.WebGLRenderer({
       canvas,
+      context,
       // the TV renders straight to the canvas: hardware MSAA (close to free on a tile-based GPU)
       antialias: GFX.lite && GFX.aa,
+      alpha: GFX.alpha,
       stencil: false,
       depth: true,
       powerPreference: 'high-performance',

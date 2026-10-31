@@ -32,6 +32,8 @@ GFX.recv = params.get('recv') === '1';
 GFX.planar = params.get('planar') === '1';
 if (params.get('slim')) GFX.slim = +params.get('slim')!;
 if (params.get('seams') === '0') GFX.seams = false;
+if (params.get('alpha') === '1') GFX.alpha = true;
+if (params.get('desync') === '1') GFX.desync = true;
 const renderer = new Renderer(canvas, new THREE.Scene(), camera);
 const world = new World(renderer.gl, 'palms');
 renderer.renderPass.mainScene = world.scene;
