@@ -87,6 +87,7 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     override init() {
         super.init()
         tracker.lastFast = { [weak self] in self?.motion.lastFast ?? 0 }
+        tracker.onPush = { [weak self] t, v, n, side in self?.motion.offerPush(t: t, vel: v, n: n, side: side) }
         motion.onSwing = { [weak self] s0 in
             guard let self else { return }
             var s = s0
@@ -371,6 +372,28 @@ final class SwingDetector {
     }
 
     func stop() { mm.stopDeviceMotionUpdates() }
+
+    /**
+     A soft push the camera tracking saw (a dink, a block): a swing of its own unless the motion
+     sensors already have this stroke. Power from the hand's speed (a dink's push is 1–1.5 m/s),
+     the path and the face as a full swing's.
+     */
+    func offerPush(t: TimeInterval, vel v: SIMD3<Double>, n: SIMD3<Double>, side: Int?) {
+        queue.addOperation {
+            // (a full swing running, or one that ended under 0.3 s before this push peaked: it's that one)
+            guard !self.swinging, t >= self.cool else { return }
+            self.cool = ProcessInfo.processInfo.systemUptime + 0.3
+            self.swingId += 1
+            let sp = simd_length(v)
+            let nf = n.z < 0 ? -n : n
+            let s = Swing(power: max(0.04, min(0.45, (sp - 0.3) / 7)),
+                          lift: sp > 0.3 ? max(-1, min(1, v.y / sp * 1.8)) : 0,
+                          face: n.y,
+                          aim: abs(nf.z) > 0.2 ? max(-1.6, min(1.6, atan2(nf.x, nf.z) / (40 * .pi / 180))) : nil,
+                          peak: 0, t: t, vel: v, n: nf, hand: v, side: side, id: self.swingId)
+            DispatchQueue.main.async { self.onSwing?(s) }
+        }
+    }
 
     /// the phone now faces the TV (screen toward you): that's "toward the TV" from here on
     func recenter() { queue.addOperation { self.wantCenter = true } }

@@ -20,6 +20,9 @@ final class RoomTracker: NSObject, ARSessionDelegate {
     var onPos: ((Double, Double, Double, Double) -> Void)?
     /// the last time the swing detector saw a fast rotation (holds the body estimate)
     var lastFast: () -> TimeInterval = { 0 }
+    /// a soft push toward the net (a dink, a block, a soft drop): its peak time, the hand's peak
+    /// velocity and the face normal (room frame), and which side of the body it was on (+1 forehand)
+    var onPush: ((TimeInterval, SIMD3<Double>, SIMD3<Double>, Int?) -> Void)?
 
     private let session = ARSession()
     private var running = false
@@ -38,6 +41,9 @@ final class RoomTracker: NSObject, ARSessionDelegate {
     private var body: (x: Double, z: Double)?
     private var vel = (x: 0.0, z: 0.0)
     private(set) var ok = false
+    /// the push being watched: when it started, its peak (speed, time, velocity, face) and the hand's side
+    private var push: (t0: TimeInterval, best: Double, bestT: TimeInterval, vel: SIMD3<Double>, n: SIMD3<Double>, side: Int?)?
+    private var pushCool: TimeInterval = 0
 
     static var supported: Bool { ARWorldTrackingConfiguration.isSupported }
 
@@ -101,7 +107,9 @@ final class RoomTracker: NSObject, ARSessionDelegate {
         lock.lock()
         hist.append(Sample(t: t, p: p, n: n))
         if hist.count > 90 { hist.removeFirst(hist.count - 90) }
+        let recent = hist.suffix(5)
         lock.unlock()
+        watchPush(Array(recent), t: t, rel: Double(simd_dot(p - o, right)) - (body?.x ?? 0))
         // where you stand: held through a swing (and a beat after), filtered otherwise
         defer { prevT = t }
         let d = p - o
@@ -122,6 +130,39 @@ final class RoomTracker: NSObject, ARSessionDelegate {
         lastSent = t
         let v = vel
         DispatchQueue.main.async { self.onPos?(b.x, b.z, v.x, v.z) }
+    }
+
+    /**
+     A dink is a short push from the shoulder with a still wrist: the phone hardly turns, so the
+     motion sensors' turn-rate trigger can miss it, but it's slow enough for the camera to track
+     cleanly. A push: the paddle moves toward the net at over 0.45 m/s, peaks and slows to under
+     half that within 0.4 s (a walk forward doesn't slow down, so it isn't one).
+     */
+    private func watchPush(_ w: [Sample], t: TimeInterval, rel: Double) {
+        guard w.count >= 4 else { return }
+        // the velocity: least-squares slope through the last few frames
+        let tm = w.reduce(0.0) { $0 + $1.t } / Double(w.count)
+        let pm = w.reduce(simd_double3(0, 0, 0)) { $0 + simd_double3($1.p) } / Double(w.count)
+        var num = simd_double3(0, 0, 0), den = 0.0
+        for s in w { let dt = s.t - tm; num += (simd_double3(s.p) - pm) * dt; den += dt * dt }
+        guard den > 1e-7 else { return }
+        let vw = num / den
+        let v = SIMD3(simd_dot(vw, simd_double3(right)), vw.y, simd_dot(vw, simd_double3(fwd)))
+        let nl = simd_double3(w.last!.n)
+        let n = SIMD3(simd_dot(nl, simd_double3(right)), nl.y, simd_dot(nl, simd_double3(fwd)))
+        let sp = simd_length(v)
+        if var pu = push {
+            if v.z > pu.best { pu.best = v.z; pu.bestT = t; pu.vel = v; pu.n = n }
+            push = pu
+            if v.z < pu.best * 0.5 {
+                push = nil
+                pushCool = t + 0.35
+                // a fast turn meanwhile: it was a full swing, the motion sensors have it
+                if t - lastFast() > 0.15 && pu.best < 3.5 { onPush?(pu.bestT, pu.vel, pu.n, pu.side) }
+            } else if t - pu.t0 > 0.4 { push = nil; pushCool = t + 0.2 }
+        } else if v.z > 0.45 && sp < 4 && t > pushCool && t - lastFast() > 0.25 {
+            push = (t, v.z, t, v, n, rel > 0.12 ? 1 : rel < -0.12 ? -1 : nil)
+        }
     }
 
     /// the phone right now from the camera tracking (position, long edge, screen normal; room
