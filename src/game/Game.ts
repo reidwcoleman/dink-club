@@ -5,7 +5,7 @@ import { impact, faceFor, rotate, norm, len } from '../sim/Paddle.ts';
 import { HL, HW, NVZ, BALL_R, FLOOR_HX } from '../sim/dims.ts';
 import { FENCE } from '../world/Club.ts';
 import { Match, type PointReason } from './Match.ts';
-import { Player, REACH, type Plan } from './Player.ts';
+import { Player, REACH, LUNGE, type Plan } from './Player.ts';
 import { PlayerRig, type StrokeKind } from './PlayerRig.ts';
 import { Human, type Outfit } from '../people/Human.ts';
 import { BallView } from './BallView.ts';
@@ -66,7 +66,7 @@ const SHOT_NAME: Record<ShotType, string> = { dink: 'dink', drop: 'drop shot', r
 /** timing window for a human swing relative to the ideal contact (s) */
 // the hit window around the ball reaching the paddle (after this player's learned delay): Wii
 // Sports-wide — a swing in it hits; when in it decides where the ball goes, not whether it goes
-const EARLY = 0.42, LATE = 0.26;
+const EARLY = 0.5, LATE = 0.3;
 const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fs2 = new THREE.Vector3(), _fv = new THREE.Vector3(), _fone = new THREE.Vector3(1.25, 1.25, 1.25), _fq = new THREE.Quaternion(), _fq2 = new THREE.Quaternion();
 
 export class Game {
@@ -247,11 +247,19 @@ export class Game {
   /** a phone's angle (handle → head, screen normal; room frame = the player's right, up, forward) */
   setPaddleAngle(slot: number, shaft: number[], face: number[], pos: number[] | null = null) {
     this.players?.[slot]?.rig.setLive(shaft, face);
-    if (pos) this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: performance.now() / 1000 };
+    if (!pos) return;
+    const now = performance.now() / 1000, prev = this.padRoom[slot], y0 = this.padY0[slot];
+    // the height you hold it at drifts into the baseline over a few seconds: raising or lowering
+    // the phone moves the paddle, but where you happen to hold it doesn't park it in the air
+    if (y0 == null) this.padY0[slot] = pos[1];
+    else this.padY0[slot] = y0 + (pos[1] - y0) * Math.min(1, Math.max(0, now - (prev?.t ?? now)) / 2.5);
+    this.padRoom[slot] = { x: pos[0], y: pos[1], z: pos[2], t: now };
   }
+  /** paddles only: how far an incoming ball has carried this player beyond where the room puts them */
+  private padAssist = [new THREE.Vector3(), new THREE.Vector3()];
   /** each phone's position in the room as its camera tracking sees it, unheld through swings (room frame) */
   private padRoom: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
-  /** the phone's height when the room was last mapped onto the court (it then holds the paddle at ~0.9 m) */
+  /** the phone's usual height (a slow average): there the paddle is at ~0.9 m */
   private padY0: (number | null)[] = [null, null];
   /** the paddle's flight (its sweet spot) a beat ago, for the pull onto the ball at contact */
   private padSnap: ({ x: number; y: number; z: number; t: number } | null)[] = [null, null];
@@ -266,10 +274,11 @@ export class Game {
     if (!r || !a || !b || performance.now() / 1000 - r.t > 0.3) return null;
     const G = 2.5, s = p.side;
     // the body's mapping (held through swings) and the hand's motion away from it
-    const bx = a.cx + s * (b.x - a.px) * G, bz = a.cz - s * (b.z - a.pz) * G;
+    const as = this.padAssist[p.index];
+    const bx = a.cx + s * (b.x - a.px) * G + as.x, bz = a.cz - s * (b.z - a.pz) * G + as.z;
     const hx = s * (r.x - b.x) * 1.15, hz = -s * (r.z - b.z) * 1.15;
     const y0 = this.padY0[p.index] ?? (this.padY0[p.index] = r.y);
-    out.set(bx + hx, THREE.MathUtils.clamp(0.9 + (r.y - y0) * 1.15, 0.1, 2.7), bz + hz);
+    out.set(bx + hx, 0.9 + THREE.MathUtils.clamp((r.y - y0) * 1.15, -0.6, 0.7), bz + hz);
     return out;
   }
 
@@ -289,6 +298,7 @@ export class Game {
     this.bodyAnchor[p.index] = { px: b.x, pz: b.z, cx: p.pos.x + (off?.x ?? 0), cz: p.pos.z + (off?.z ?? 0) };
     const r = this.padRoom[p.index];
     if (r) this.padY0[p.index] = r.y;
+    this.padAssist[p.index].set(0, 0, 0);
   }
 
   /** where the room position puts the player on court (a step in the room is ~2.3 on court) */
@@ -601,7 +611,7 @@ export class Game {
     const events = pr.events.slice();
     if (this.bouncesAfterHit > 0 && this.bounceSide === p.side) events.unshift({ kind: 'bounce', x: b.p.x, z: b.p.z, t: -0.01, speed: 0, vy: 0 });
     // the two-bounce rule: the serve and the return must bounce
-    const plan = this.bodyMode(p) ? p.planReach(pr.pts, events, this.clock, this.strikes >= 3) : p.planIntercept(pr.pts, events, this.clock, this.strikes >= 3);
+    const plan = this.bodyMode(p) && !this.paddlesOnly ? p.planReach(pr.pts, events, this.clock, this.strikes >= 3) : p.planIntercept(pr.pts, events, this.clock, this.strikes >= 3);
     if (!plan) return;
     if (p.plan && p.plan.swung) {
       const moved = plan.ball.distanceTo(p.plan.ball);
@@ -647,6 +657,17 @@ export class Game {
     if (this.bodyMode(p)) {
       // the player is wherever you are (with a real body's acceleration and top speed)
       const t = this.bodyTarget(p);
+      if (t && this.paddlesOnly) {
+        // paddles only: an incoming ball carries you to it — the last 0.35 m is yours to cover
+        // (step for it and you're there sooner), the rest the game covers
+        const as = this.padAssist[p.index];
+        const want = receiving && p.plan && !this.dead ? _fv.set(p.plan.body.x - t.x, 0, p.plan.body.z - t.z) : _fv.set(0, 0, 0);
+        const l = want.length();
+        want.multiplyScalar(l > 0.35 ? (l - 0.35) / l : 0);
+        as.lerp(want, Math.min(1, dt / (l > 0 ? 0.12 : 0.5)));
+        t.add(as);
+        t.x = THREE.MathUtils.clamp(t.x, -FLOOR_HX + 0.4, FLOOR_HX - 0.4);
+      }
       p.drive(dt, t ? p.seek(t, 1) : new THREE.Vector3());
       return;
     }
@@ -846,10 +867,10 @@ export class Game {
     const dy = Math.abs(b.y - plan.ball.y);
     p.plan = null;
     const body = this.bodyMode(p);
-    const reach = body ? 1.05 : p.human ? 1.9 : 1.1, reachY = body ? 0.8 : p.human ? 1.4 : 0.9;
+    const reach = body ? (this.paddlesOnly ? 1.3 + (plan.lunge ? LUNGE : 0) : 1.05) : p.human ? 1.9 : 1.1, reachY = body ? (this.paddlesOnly ? 1.1 : 0.8) : p.human ? 1.4 : 0.9;
     if (dh > reach || dy > reachY || b.y > 2.8 || b.y < 0.04) {
       this.missed[p.index] = true;
-      this.say(`miss ${this.names[p.index]} dh=${dh.toFixed(2)} dy=${dy.toFixed(2)} y=${b.y.toFixed(2)}`);
+      this.say(`miss ${this.names[p.index]} bp=${p.pos.distanceTo(plan.body).toFixed(2)} as=${this.padAssist[p.index].length().toFixed(2)} late=${plan.late.toFixed(2)} lunge=${plan.lunge} dh=${dh.toFixed(2)} dy=${dy.toFixed(2)} y=${b.y.toFixed(2)}`);
       if (p.human) this.onPadEvent?.(p.index, 'whiff', {});
       this.committed[p.index] = null;
       return;
@@ -862,7 +883,7 @@ export class Game {
       // at full stretch (the run got there late) the contact is weaker
       if (plan.late > -0.05) quality *= 1 - Math.min(0.35, (plan.late + 0.05) * 0.9);
       // off the sweet spot: the ball came in away from where the paddle wanted it
-      quality *= body ? 1 - Math.min(0.6, Math.max(0, dh - 0.3) * 0.9) : 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
+      quality *= body && !this.paddlesOnly ? 1 - Math.min(0.6, Math.max(0, dh - 0.3) * 0.9) : 1 - Math.min(0.3, Math.max(0, dh - 0.35) * 0.35);
       // a hard ball leaves no margin: a block of a smash has to be timed
       if (inSpeed > 16) quality *= 1 - Math.min(0.6, ((inSpeed - 16) / 10) * (Math.max(0, Math.abs(err) - 0.04) / 0.08));
       const i = p.index;
@@ -1192,6 +1213,17 @@ export class Game {
     // where the sweet spot is: your phone's spot when it's tracked, else where the player carries it
     const sweet = p.human && this.bodyMode(p) ? this.trackedPaddle(p, _fs2) : null;
     if (!sweet) p.rig.sweetSpot(_fs2);
+    // aimed at the ball: over the last second of an incoming ball the paddle goes to where it will
+    // be met (its height all of the way, across most of it) and your hand moves it around that
+    const pl = p.plan;
+    if (p.human && pl && this.lastHitter !== null && this.lastHitter !== p.index && !this.dead) {
+      const w = 1 - THREE.MathUtils.smoothstep(pl.tContact - this.clock, 0.15, 1.0);
+      if (w > 0) {
+        _fs2.x += (pl.ball.x - _fs2.x) * w * 0.85;
+        _fs2.z += (pl.ball.z - _fs2.z) * w * 0.85;
+        _fs2.y += (pl.ball.y - _fs2.y) * w * 0.95;
+      }
+    }
     const live = p.rig.liveQuat(_fq2);
     if (live) _fq.slerp(live, sweet ? 1 : p.rig.inStroke ? 0.65 : 1);
     // the hit: the face meets the ball — the last ~0.12 s before a committed strike pull the sweet
