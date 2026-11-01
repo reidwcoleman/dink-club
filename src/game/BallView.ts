@@ -22,6 +22,9 @@ export class BallView {
   readonly flashSprite: THREE.Sprite;
   private flashT = 1;
   private flashK = 0;
+  /** the timing ring: closes on the contact point, meeting the ball's size as the ball gets there */
+  readonly cue: THREE.Sprite;
+  private cueT = 0;
 
   constructor() {
     const mat = new THREE.MeshPhysicalMaterial({
@@ -87,6 +90,40 @@ export class BallView {
     this.flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(fc), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
     this.flashSprite.visible = false;
     this.flashSprite.renderOrder = 4;
+    const cc = document.createElement('canvas');
+    cc.width = cc.height = 128;
+    const cg = cc.getContext('2d')!;
+    cg.strokeStyle = 'rgba(0,0,0,0.45)';
+    cg.lineWidth = 12;
+    cg.beginPath();
+    cg.arc(64, 64, 54, 0, Math.PI * 2);
+    cg.stroke();
+    cg.strokeStyle = 'rgba(255,255,255,1)';
+    cg.lineWidth = 6;
+    cg.beginPath();
+    cg.arc(64, 64, 54, 0, Math.PI * 2);
+    cg.stroke();
+    this.cue = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cc), depthTest: false, depthWrite: false, transparent: true, toneMapped: false }));
+    this.cue.visible = false;
+    this.cue.renderOrder = 5;
+  }
+
+  /**
+   * The timing ring around where the ball will be met: `u` is the time left over the ring's
+   * whole run (1 → 0), so it closes at a steady rate and meets the ball's size at contact; it turns
+   * green in the moment to swing (and pulses while the game holds the ball there for the swing)
+   */
+  setCue(at: V3 | null, u: number, now: boolean, dt: number) {
+    if (!at) { this.cue.visible = false; return; }
+    this.cueT += dt;
+    this.cue.visible = true;
+    this.cue.position.set(at.x, at.y, at.z);
+    const r = BALL_R * BallView.VIS * 2.6 + u * 0.75 + (now ? Math.sin(this.cueT * 18) * 0.015 : 0);
+    this.cue.scale.set(r * 2, r * 2, 1);
+    const m = this.cue.material;
+    m.opacity = 0.35 + 0.55 * (1 - u);
+    if (now) m.color.setRGB(0.45, 1.0, 0.45);
+    else m.color.setRGB(1.0, 0.97, 0.75);
   }
 
   /** the paddle meets the ball: a quick bloom (k 0..1 by pace) */

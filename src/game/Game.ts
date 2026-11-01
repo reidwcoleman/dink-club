@@ -144,8 +144,8 @@ export class Game {
 
   constructor(readonly world: World, readonly camera: THREE.PerspectiveCamera, readonly input: Input, readonly hud: HUD, readonly audio: Audio, readonly crowd: Crowd | null) {
     this.dir = new CameraDirector(camera);
-    world.scene.add(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite);
-    world.dynamic.push(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite);
+    world.scene.add(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite, this.ballView.cue);
+    world.dynamic.push(this.ballView.mesh, this.ballView.streak, this.ballView.shadow, this.ballView.marker, this.ballView.flashSprite, this.ballView.cue);
     this.ball.surface = world.venue.surface;
   }
 
@@ -480,10 +480,25 @@ export class Game {
     }
     this.ballView.update(this.ball.p, this.ball.w, this.ball.v, dt, this.camera.position);
     this.ballView.setMarker(this.landingSpot(), dt);
+    this.timingCue(dt);
     this.world.ballPos.copy(look);
     if (this.state === 'serving' || this.state === 'rally' || (this.state === 'pointOver' && this.stateT < 1.2)) this.replay.record(dt, this.clock);
     this.dir.update(dt, look, this.human.pos, this.players[1].pos);
     this.hud.update(dt);
+  }
+
+  /** the ring that times your swing: over the last 0.9 s before contact, until you swing */
+  private timingCue(dt: number) {
+    const recv = this.lastHitter === null ? null : this.players[1 - this.lastHitter];
+    const pl = recv?.plan;
+    if (this.state !== 'rally' || this.cfg.demo || this.dead || this.pendingPoint || !recv?.human || !pl || this.committed[recv.index] || this.missed[recv.index]) {
+      this.ballView.setCue(null, 0, false, dt);
+      return;
+    }
+    const tTo = pl.tContact - this.clock;
+    if (tTo > 0.9) { this.ballView.setCue(null, 0, false, dt); return; }
+    const u = THREE.MathUtils.clamp(tTo / 0.9, 0, 1);
+    this.ballView.setCue(pl.ball, u, !!pl.waited || Math.abs(tTo) < 0.08, dt);
   }
 
   /** where the ball will land on a human's side (a ring on the court), until it does */
@@ -1076,6 +1091,16 @@ export class Game {
         spec = { speed: 8.5 + 5 * pw, rpm: 500, clear: Math.abs(opp.pos.z) < NVZ + 1.5 ? 0.16 : 0.3 };
     }
     if (plan.volley && type === 'reset') { depth = 3.8 + Math.random() * 2; spec = { speed: 8 + 6 * pw, rpm: -300, clear: 0.12 }; }
+    if (!p.human) {
+      // the computer's spin varies the way a player's does: dinks rolled or sliced, drives brushed
+      // more or less, a slice groundstroke now and then (the better the player, the heavier it is)
+      const sk = 0.5 + 0.5 * p.skill.spin, R = Math.random();
+      if (type === 'dink' || type === 'drop') spec.rpm = (R < 0.45 ? 350 + Math.random() * 450 : -(250 + Math.random() * 600)) * sk;
+      else if (type === 'drive') spec.rpm = (900 + Math.random() * 1500) * sk;
+      else if (type === 'reset' && !plan.volley) spec.rpm = (R < 0.3 ? -(600 + Math.random() * 700) : 300 + Math.random() * 900) * sk;
+      // topspin pulls a ball down: it can go a little harder for the same margin
+      if (type === 'drive' || type === 'reset') spec.speed *= 1 + Math.max(-0.1, spec.rpm / 12000);
+    }
     if (p.human) {
       // how hard you swing sets how deep it goes within the shot (no dice): a soft dink drops just
       // over, a firmer one lands at the kitchen line; a full drive goes to the baseline
