@@ -38,6 +38,10 @@ final class RoomTracker: NSObject, ARSessionDelegate {
     private var fx = OneEuro(), fz = OneEuro()
     private var px = OneEuro(minCutoff: 3, beta: 1.5), py = OneEuro(minCutoff: 3, beta: 1.5), pz = OneEuro(minCutoff: 3, beta: 1.5)
     private var latest: (t: TimeInterval, pos: SIMD3<Double>, shaft: SIMD3<Double>, face: SIMD3<Double>, vel: SIMD3<Double>)?
+    /// one camera frame of the phone, unfiltered: its time (the frame's capture), position, long edge
+    /// and screen normal in the room frame. The motion sensors fuse it (SwingDetector)
+    struct Fix { let t: TimeInterval; let pos: SIMD3<Double>; let shaft: SIMD3<Double>; let face: SIMD3<Double> }
+    private var raw: Fix?
     private var body: (x: Double, z: Double)?
     private var vel = (x: 0.0, z: 0.0)
     private(set) var ok = false
@@ -85,6 +89,7 @@ final class RoomTracker: NSObject, ARSessionDelegate {
             fwd = simd_normalize(f)
             right = simd_float3(-fwd.z, 0, fwd.x)
             body = nil
+            lock.lock(); raw = nil; lock.unlock()
             fx = OneEuro(); fz = OneEuro()
             px = OneEuro(minCutoff: 3, beta: 1.5); py = OneEuro(minCutoff: 3, beta: 1.5); pz = OneEuro(minCutoff: 3, beta: 1.5)
         }
@@ -102,6 +107,7 @@ final class RoomTracker: NSObject, ARSessionDelegate {
             let fc = toRoom(simd_float3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
             lock.lock()
             latest = (t, pos, sh, fc, latest?.vel ?? .zero)
+            raw = Fix(t: t, pos: rp, shaft: sh, face: fc)
             lock.unlock()
         }
         lock.lock()
@@ -171,6 +177,13 @@ final class RoomTracker: NSObject, ARSessionDelegate {
         } else if v.z > 0.45 && sp < 4 && t > pushCool && t - lastFast() > 0.25 {
             push = (t, v.z, t, v, n, rel > 0.12 ? 1 : rel < -0.12 ? -1 : nil)
         }
+    }
+
+    /// the camera's latest frame of the phone (nil while tracking is lost)
+    func rawFix() -> Fix? {
+        lock.lock()
+        defer { lock.unlock() }
+        return ok ? raw : nil
     }
 
     /// the phone right now from the camera tracking (position, long edge, screen normal; room

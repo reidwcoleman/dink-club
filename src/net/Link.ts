@@ -17,8 +17,8 @@ export type PadMsg =
   | { t: 'tap'; what: 'start' | 'pause' | 'again' }
   /** the phone's position in the room (m: x to the right, z toward the TV), from the app's camera tracking */
   | { t: 'pos'; x: number; z: number; vx?: number; vz?: number }
-  /** the phone's angle, ~30 a second: its long edge (handle → head) and its screen normal, room frame */
-  | { t: 'ori'; s: number[]; f: number[]; p?: number[]; v?: number[]; w?: number[] }
+  /** the phone's pose, up to 100 a second: its long edge (handle → head) and screen normal, room frame; with the app, position, velocity, turn rate and when it was sampled (phone clock) */
+  | { t: 'ori'; s: number[]; f: number[]; p?: number[]; v?: number[]; w?: number[]; tp?: number }
   | { t: 'pong'; k: number; tp?: number };
 
 /** TV → phone */
@@ -44,6 +44,8 @@ interface Slot {
   /** clock offset samples (phone − TV) with their round trip: the lowest-rtt ones are trusted */
   offs: { off: number; rtt: number }[];
   pings: Map<number, number>;
+  /** the newest pose's sample time (phone clock): Wi-Fi bunches and reorders datagrams */
+  lastTp?: number;
 }
 
 export class Lobby {
@@ -187,7 +189,19 @@ export class Lobby {
       }
       if (m.t === 'ori') {
         const sv = vec3(m.s), fv = vec3(m.f);
-        if (sv && fv) this.onOri?.(slot, sv, fv, vec3(m.p), vec3(m.v), vec3(m.w), this.delay(slot));
+        // how old it is: from the phone's own sample time on the synced clock (each one's real
+        // age, through Wi-Fi's bunching), else the link's usual delay; one older than the last is dropped
+        let age = this.delay(slot);
+        if (typeof m.tp === 'number' && Number.isFinite(m.tp)) {
+          if (s.lastTp !== undefined && m.tp <= s.lastTp && m.tp > s.lastTp - 5) return;
+          s.lastTp = m.tp;
+          const off = this.offset(slot);
+          if (off !== null) {
+            const a = now - (m.tp - off);
+            if (a > -0.03 && a < 0.3) age = Math.max(0, a);
+          }
+        }
+        if (sv && fv) this.onOri?.(slot, sv, fv, vec3(m.p), vec3(m.v), vec3(m.w), age);
         return;
       }
       if (m.t === 'swing') {

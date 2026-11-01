@@ -68,13 +68,8 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
     private let finder = TVFinder()
     private let keepAlive = KeepAlive()
     private let pock = Pock()
-    /// the motion sensors' heading correction (rad), trued to the camera tracking whenever it sees
-    private var yawTrue = 0.0
-    /// the paddle's position carried on by the motion sensors through a gap in the camera tracking
-    /// (the last camera fix's time is `at`; `t` the last step)
-    private var fix: (pos: SIMD3<Double>, t: TimeInterval, at: TimeInterval)?
-    private var lastFixPos: SIMD3<Double>?
     @Published var live = false
+    private var nextPose: TimeInterval = 0
     @Published var pulse = false
     @Published var text = "Connecting…"
     @Published var ended = false
@@ -121,44 +116,15 @@ final class PaddleLink: NSObject, ObservableObject, WKScriptMessageHandler {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.pulse = false }
             }
         }
-        motion.onPose = { [weak self] sh0, f0, w0, vh0 in
+        let tr = tracker
+        motion.fixSource = { tr.rawFix() }
+        motion.onPose = { [weak self] sh, f, w, pos, vel, t in
+            // (the motion sensors and the camera already fused, in the camera's room: see SwingDetector.fuse)
             guard let self, self.live else { return }
-            // the camera tracking holds the room still (no heading drift): when it has the phone,
-            // its angle is the paddle's and the motion sensors' heading is trued to it; through a
-            // fast swing (blurred frames) the motion sensors carry on, trued by the last offset
-            var sh = sh0, f = f0
-            var pos: SIMD3<Double>? = nil, vel: SIMD3<Double>? = nil
-            let now = ProcessInfo.processInfo.systemUptime
-            if let ar = self.tracker.pose(now: now) {
-                let heading = { (a: SIMD3<Double>, b: SIMD3<Double>) -> Double in
-                    let v = a.x * a.x + a.z * a.z > b.x * b.x + b.z * b.z ? a : b
-                    return atan2(v.x, v.z)
-                }
-                var d = heading(ar.face, ar.shaft) - heading(f0, sh0)
-                d = atan2(sin(d), cos(d))
-                self.yawTrue += atan2(sin(d - self.yawTrue), cos(d - self.yawTrue)) * 0.15
-                sh = ar.shaft; f = ar.face; pos = ar.pos; vel = ar.vel
-                self.fix = (ar.pos, now, now)
-            }
-            // the motion sensors' vectors in the camera's room (trued by the heading offset)
-            let c = cos(self.yawTrue), s = sin(self.yawTrue)
-            let rot = { (v: SIMD3<Double>) in SIMD3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c) }
-            let w = rot(w0)
-            if pos == nil {
-                sh = rot(sh0); f = rot(f0)
-                // the camera lost the phone (a blurred whip, a hand over the lens): the motion
-                // sensors carry the paddle on from its last fix for a moment, never far from it
-                if var fx = self.fix, now - fx.at < 0.6 {
-                    let vh = rot(vh0)
-                    var p = fx.pos + vh * min(0.05, max(0, now - fx.t))
-                    let d = p - (self.lastFixPos ?? fx.pos)
-                    if simd_length(d) > 1.2 { p = (self.lastFixPos ?? fx.pos) + simd_normalize(d) * 1.2 }
-                    fx.pos = p; fx.t = now
-                    self.fix = fx
-                    pos = p; vel = vh
-                }
-            } else { self.lastFixPos = pos }
-            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f, pos: pos, vel: vel, w: w) }
+            // (sent 60 a second, each the freshest sample: the TV draws at 30 and leads each by its age)
+            if t < self.nextPose { return }
+            self.nextPose = max(self.nextPose + 1.0 / 60, t - 0.02)
+            if let lan = self.lanLink { lan.sendPose(shaft: sh, face: f, pos: pos, vel: vel, w: w, t: t) }
             else {
                 var p = pos.map { String(format: ",p:[%.3f,%.3f,%.3f]", $0.x, $0.y, $0.z) } ?? ""
                 if let v = vel { p += String(format: ",v:[%.3f,%.3f,%.3f]", v.x, v.y, v.z) }
@@ -357,10 +323,22 @@ struct Swing {
  */
 final class SwingDetector {
     var onSwing: ((Swing) -> Void)?
-    /// the phone ~60 a second, room frame: long edge (handle → head), screen normal, turn rate
-    /// (rad/s) and the hand's velocity from the motion sensors (m/s, a leaky integral: good over a swing)
-    var onPose: ((SIMD3<Double>, SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) -> Void)?
-    private var lastPose: TimeInterval = 0
+    /// the phone at every sample (100 a second), in the camera's room frame: long edge (handle → head), screen
+    /// normal, turn rate (rad/s), and where it is and how fast it's moving (m, m/s) when the camera
+    /// has had it lately; with the sample's time (seconds since boot)
+    var onPose: ((SIMD3<Double>, SIMD3<Double>, SIMD3<Double>, SIMD3<Double>?, SIMD3<Double>?, TimeInterval) -> Void)?
+    /// the camera tracking's latest frame (RoomTracker.rawFix)
+    var fixSource: (() -> RoomTracker.Fix?)?
+    /// the motion sensors' heading against the camera's room (they drift apart slowly; trued at every frame)
+    private var yawTrue = 0.0
+    private var yawSet = false
+    /// the fused paddle: position and velocity (room frame), carried by the accelerometer at 100 Hz
+    /// and pulled onto every camera frame at the moment that frame was taken
+    private var fp = SIMD3<Double>(0, 0, 0), fv = SIMD3<Double>(0, 0, 0)
+    private var fixT: TimeInterval = 0, fixAt: TimeInterval = -10
+    private var anchor: SIMD3<Double>?
+    private struct H { let t: TimeInterval; var p: SIMD3<Double>; let sh: SIMD3<Double>; let fc: SIMD3<Double>; let g: Double }
+    private var hist: [H] = []
     /// turn about the vertical through the current swing (rad, + = counterclockwise from above)
     private var yawTurn = 0.0
     private let mm = CMMotionManager()
@@ -419,7 +397,65 @@ final class SwingDetector {
     }
 
     /// the phone now faces the TV (screen toward you): that's "toward the TV" from here on
-    func recenter() { queue.addOperation { self.wantCenter = true } }
+    func recenter() { queue.addOperation { self.wantCenter = true; self.yawSet = false; self.anchor = nil; self.hist.removeAll() } }
+
+    /**
+     The camera and the motion sensors as one tracker. The camera's fixes are exact but come ~60 a
+     second, each 20–50 ms old by the time it lands, and stop when a fast swing blurs the picture;
+     the accelerometer is instant and 100 a second but drifts within a second. So the paddle is
+     carried by the accelerometer (velocity and position integrated every sample), and each camera
+     frame, compared with where the paddle was estimated at the moment that frame was taken, pulls
+     the estimate onto it (a share of the gap into the position, some into the velocity). Through
+     a blurred whip it carries on on the accelerometer, leashed to the last fix. The heading between
+     the two is trued at the same moments while the phone turns slowly. True while the camera has
+     had the phone in the last 0.6 s.
+     */
+    private func fuse(t: TimeInterval, dt: Double, a: SIMD3<Double>, sh: SIMD3<Double>, fc: SIMD3<Double>, g: Double) -> Bool {
+        let c = cos(yawTrue), sn = sin(yawTrue)
+        let rot = { (v: SIMD3<Double>) in SIMD3(v.x * c + v.z * sn, v.y, -v.x * sn + v.z * c) }
+        fv += rot(a) * dt
+        fp += fv * dt
+        // no camera lately: the velocity's drift is let go
+        if t - fixAt > 0.1 { fv *= exp(-dt / 0.35) }
+        hist.append(H(t: t, p: fp, sh: sh, fc: fc, g: g))
+        if hist.count > 50 { hist.removeFirst(hist.count - 50) }
+        if let f = fixSource?(), f.t > fixT {
+            let gap = f.t - fixT
+            fixT = f.t
+            if anchor == nil || t - fixAt > 0.6 {
+                // (re)acquired: start from the frame
+                fp = f.pos; fv = .zero; anchor = f.pos; fixAt = t
+                hist.removeAll()
+            } else if let i = hist.lastIndex(where: { $0.t <= f.t }) {
+                // the estimate at the frame's moment (between the samples around it)
+                let h0 = hist[i], h1 = i + 1 < hist.count ? hist[i + 1] : h0
+                let k = h1.t > h0.t ? max(0, min(1, (f.t - h0.t) / (h1.t - h0.t))) : 0
+                let e = f.pos - (h0.p + (h1.p - h0.p) * k)
+                let T = max(1.0 / 120, min(0.1, gap))
+                let ep = e * 0.3, ev = e * (0.07 / T)
+                fp += ep; fv += ev
+                // (the samples since that frame move with the correction, so the next frame isn't double-counted)
+                for j in hist.indices where hist[j].t > f.t { hist[j].p += ep + ev * (hist[j].t - f.t) }
+                // the heading, compared at the same moment, while the phone turns slowly (no blur, no lag)
+                if h0.g < 150 {
+                    let useFace = f.face.x * f.face.x + f.face.z * f.face.z > f.shaft.x * f.shaft.x + f.shaft.z * f.shaft.z
+                    let ar = useFace ? f.face : f.shaft, cm = useFace ? h0.fc : h0.sh
+                    if ar.x * ar.x + ar.z * ar.z > 0.1 && cm.x * cm.x + cm.z * cm.z > 0.1 {
+                        let d = atan2(ar.x, ar.z) - atan2(cm.x, cm.z)
+                        let r = atan2(sin(d - yawTrue), cos(d - yawTrue))
+                        yawTrue += r * (yawSet ? 0.08 : 1)
+                        yawSet = true
+                    }
+                }
+                anchor = f.pos; fixAt = t
+            }
+        }
+        guard let an = anchor, t - fixAt < 0.6 else { return false }
+        // (never further than a long reach from where the camera last saw it)
+        let d = fp - an
+        if simd_length(d) > 1.2 { fp = an + simd_normalize(d) * 1.2 }
+        return true
+    }
 
     private func step(_ m: CMDeviceMotion) {
         let t = m.timestamp
@@ -446,21 +482,27 @@ final class SwingDetector {
         let up = -grav
         let fwd = toDev(fwdRef!)
         let right = simd_cross(fwd, up)
-        let room = { (v: SIMD3<Double>) -> SIMD3<Double> in SIMD3(simd_dot(v, right), simd_dot(v, up), simd_dot(v, fwd)) }
+        let roomC = { (v: SIMD3<Double>) -> SIMD3<Double> in SIMD3(simd_dot(v, right), simd_dot(v, up), simd_dot(v, fwd)) }
         let w = SIMD3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z)
-        if t - lastPose > 1.0 / 60 - 0.002 {
-            lastPose = t
-            let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1)), wr = room(w), vh = vHand
-            DispatchQueue.main.async { self.onPose?(sh, fc, wr, vh) }
-        }
         let g = simd_length(w) * 180 / .pi
         if g > 140 { lastFast = t }
-        // the hand: user acceleration integrated, leaking away between swings (it only has to hold a swing)
+        let aC = roomC(SIMD3(m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z) * 9.81)
+        let tracked = fuse(t: t, dt: dt, a: aC, sh: roomC(SIMD3(0, 1, 0)), fc: roomC(SIMD3(0, 0, 1)), g: g)
+        // everything from here on in the camera's room (the motion sensors' heading trued to it)
+        let c = cos(yawTrue), sn = sin(yawTrue)
+        let room = { (v: SIMD3<Double>) -> SIMD3<Double> in let r = roomC(v); return SIMD3(r.x * c + r.z * sn, r.y, -r.x * sn + r.z * c) }
         let a = room(SIMD3(m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z) * 9.81)
+        do {
+            let sh = room(SIMD3(0, 1, 0)), fc = room(SIMD3(0, 0, 1)), wr = room(w)
+            let p: SIMD3<Double>? = tracked ? fp : nil, v: SIMD3<Double>? = tracked ? fv : nil
+            DispatchQueue.main.async { self.onPose?(sh, fc, wr, p, v, t) }
+        }
+        // the hand: user acceleration integrated, leaking away between swings (it only has to hold
+        // a swing); with the camera's fixes, the fused velocity (no drift)
         vHand = vHand * exp(-dt / (swinging ? 0.6 : 0.2)) + a * dt
         // the paddle head turning about the hand
         let tip = room(simd_cross(w, SIMD3(0, 0.16, 0)))
-        let vHead = vHand + tip, spNow = simd_length(vHead)
+        let vHead = (tracked ? fv : vHand) + tip, spNow = simd_length(vHead)
         if !swinging {
             samples.removeAll(keepingCapacity: true)
             // a full swing turns the phone fast; a dink or a block barely turns it but pushes the
@@ -479,7 +521,7 @@ final class SwingDetector {
         yawTurn += simd_dot(w, up) * dt
         // how much swing there is: turn rate and head speed together, so soft pushes peak too
         let e = g / 500 + spNow / 4
-        samples.append(S(t: t, g: g, e: e, v: vHead, h: vHand, n: room(SIMD3(0, 0, 1))))
+        samples.append(S(t: t, g: g, e: e, v: vHead, h: tracked ? fv : vHand, n: room(SIMD3(0, 0, 1))))
         let n = samples.count
         var k = 0
         for i in 1..<n where samples[i].e > samples[k].e { k = i }

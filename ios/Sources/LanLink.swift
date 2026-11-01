@@ -108,10 +108,11 @@ final class LanLink {
         q.asyncAfter(deadline: .now() + 0.012) { self.send(m) }
     }
 
-    /// the paddle's angle (lost ones don't matter: the next is 33 ms behind)
-    func sendPose(shaft: SIMD3<Double>, face: SIMD3<Double>, pos: SIMD3<Double>?, vel: SIMD3<Double>?, w: SIMD3<Double>) {
+    /// the paddle's pose, 60 a second, with the moment it was sampled (the TV times its age from
+    /// that; a lost one doesn't matter, the next is 17 ms behind)
+    func sendPose(shaft: SIMD3<Double>, face: SIMD3<Double>, pos: SIMD3<Double>?, vel: SIMD3<Double>?, w: SIMD3<Double>, t: TimeInterval) {
         let r = { (v: Double) in (v * 1000).rounded() / 1000 }
-        var m: [String: Any] = ["t": "ori", "s": [r(shaft.x), r(shaft.y), r(shaft.z)], "f": [r(face.x), r(face.y), r(face.z)], "w": [r(w.x), r(w.y), r(w.z)]]
+        var m: [String: Any] = ["t": "ori", "s": [r(shaft.x), r(shaft.y), r(shaft.z)], "f": [r(face.x), r(face.y), r(face.z)], "w": [r(w.x), r(w.y), r(w.z)], "tp": (t * 10000).rounded() / 10000]
         if let p = pos { m["p"] = [r(p.x), r(p.y), r(p.z)] }
         if let v = vel { m["v"] = [r(v.x), r(v.y), r(v.z)] }
         send(m)

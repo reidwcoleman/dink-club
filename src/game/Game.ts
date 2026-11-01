@@ -250,7 +250,7 @@ export class Game {
     // the pose is a Wi-Fi hop old when it lands, and a frame older when it's seen: it's carried
     // forward by the phone's own turn rate and speed over that time, so the paddle is where the
     // phone is now, not where it was
-    const lead = THREE.MathUtils.clamp(delay, 0, 0.06) + 0.025;
+    const lead = THREE.MathUtils.clamp(delay, 0, 0.12) + 0.025;
     this.players?.[slot]?.rig.setLive(shaft, face, w, lead);
     if (!pos) return;
     const now = performance.now() / 1000, prev = this.padRoom[slot], y0 = this.padY0[slot];
@@ -293,7 +293,7 @@ export class Game {
     const as = this.padAssist[p.index];
     const bx = a.cx + s * (b.x - a.px) * G + as.x, bz = a.cz - s * (b.z - a.pz) * G + as.z;
     // (led by the phone's velocity over the link delay and the time since it arrived)
-    const ld = Math.min(0.12, r.lead + performance.now() / 1000 - r.t);
+    const ld = Math.min(0.16, r.lead + performance.now() / 1000 - r.t);
     // (at most 0.3 m ahead: a whip's speed is a guess for longer than a blink)
     const vl = Math.hypot(r.vx, r.vy, r.vz), kl = vl * ld > 0.3 ? 0.3 / (vl * ld) : 1;
     const rx = r.x + r.vx * ld * kl, ry = r.y + r.vy * ld * kl, rz = r.z + r.vz * ld * kl;
